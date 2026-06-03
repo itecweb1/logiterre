@@ -2238,49 +2238,54 @@ elif "⚙️" in page:
 2. Emails → ton compte → **Réactiver**
 3. Attends 5-10 minutes puis reteste""")
     with tab2:
-        st.markdown('<div class="section-title">📡 Serveur de tracking d\'ouverture</div>',unsafe_allow_html=True)
-        # Statut serveur
-        import socket
-        def _port_open(p):
-            s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.settimeout(0.5)
-            try: return s.connect_ex(("127.0.0.1",p))==0
-            finally: s.close()
-        running=_port_open(8765)
-        if running:
-            st.success("🟢 Serveur de tracking ACTIF sur http://localhost:8765")
-        else:
-            st.warning("🔴 Serveur de tracking arrêté")
+        st.markdown('<div class="section-title">📡 Tracking</div>',unsafe_allow_html=True)
+        IS_CLOUD = str(BASE_DIR).startswith("/mount") or not Path(PYTHON).exists()
 
-        c1,c2=st.columns(2)
-        with c1:
-            if st.button("▶️ Démarrer le serveur de tracking",use_container_width=True,
-                         disabled=running):
-                import subprocess as sp
-                sp.Popen([PYTHON, str(BASE_DIR/"tracking_server.py"),"8765"],
-                         stdout=sp.DEVNULL,stderr=sp.DEVNULL)
-                time.sleep(2); st.rerun()
-        with c2:
-            if st.button("⏹️ Arrêter",use_container_width=True,disabled=not running):
-                subprocess.run(["pkill","-f","tracking_server.py"]); time.sleep(1); st.rerun()
+        # État RSVP (Supabase) — le tracking principal
+        if supa.enabled():
+            st.success("🟢 Tracking RSVP ACTIF (Supabase) — qui confirme sa venue est enregistré, "
+                       "en ligne, sans serveur local.")
+        else:
+            st.info("RSVP local (SQLite). Configure Supabase pour le RSVP persistant en ligne.")
 
         st.markdown("---")
-        st.markdown("""**Comment activer le suivi d'ouverture :**
-1. Démarre le serveur ci-dessus (ou `python3 tracking_server.py`)
-2. **En local** : colle `http://localhost:8765` dans ✍️ Composer → Tracking
-3. **Pour de vrais destinataires** : expose-le publiquement avec
-   `ngrok http 8765` puis colle l'URL ngrok (https://xxx.ngrok.io)
-4. Envoie — chaque ouverture est détectée 📡
+        st.markdown('<div class="section-title">👁️ Pixel d\'ouverture (optionnel)</div>',unsafe_allow_html=True)
 
-⚠️ *Sans URL publique, le tracking ne marche que pour les tests locaux
-(Gmail/Outlook ne peuvent pas atteindre localhost).*""")
+        if IS_CLOUD:
+            st.info("☁️ Sur Streamlit Cloud, le serveur de pixel ne peut pas tourner ici. "
+                    "Le **RSVP** (ci-dessus) couvre l'essentiel. Pour le pixel d'ouverture, "
+                    "lance `tracking_server.py` + un tunnel depuis une machine, puis colle l'URL "
+                    "dans Composer.")
+        else:
+            import socket
+            def _port_open(p):
+                s=socket.socket(socket.AF_INET,socket.SOCK_STREAM); s.settimeout(0.5)
+                try: return s.connect_ex(("127.0.0.1",p))==0
+                finally: s.close()
+            running=_port_open(8765)
+            st.success("🟢 Serveur pixel ACTIF (localhost:8765)") if running else st.warning("🔴 Serveur pixel arrêté")
+            c1,c2=st.columns(2)
+            with c1:
+                if st.button("▶️ Démarrer le serveur pixel",use_container_width=True,disabled=running):
+                    import subprocess as sp, sys as _sys
+                    sp.Popen([_sys.executable, str(BASE_DIR/"tracking_server.py"),"8765"],
+                             stdout=sp.DEVNULL,stderr=sp.DEVNULL)
+                    time.sleep(2); st.rerun()
+            with c2:
+                if st.button("⏹️ Arrêter",use_container_width=True,disabled=not running):
+                    subprocess.run(["pkill","-f","tracking_server.py"]); time.sleep(1); st.rerun()
 
         st.markdown("---")
         st.markdown('<div class="section-title">👁️ Ouvertures détectées</div>',unsafe_allow_html=True)
-        opens=db.get_opens()
+        try:
+            opens = supa.get_opens() if supa.enabled() else db.get_opens()
+        except Exception:
+            opens = []
         if opens:
             st.success(f"👁️ **{len(opens)}** ouverture(s) enregistrée(s)")
-            df_o=pd.DataFrame([{"Organisation":o.get("name","")[:40],"Email":o.get("email",""),
-                                "Ouvert le":o.get("opened_at","")} for o in opens])
+            df_o=pd.DataFrame([{"Organisation":o.get("org_name") or o.get("name",""),
+                                "Email":o.get("email",""),
+                                "Ouvert le":o.get("created") or o.get("opened_at","")} for o in opens])
             st.dataframe(df_o,use_container_width=True,hide_index=True,height=240)
         else:
             st.info("Aucune ouverture détectée pour l'instant.")
