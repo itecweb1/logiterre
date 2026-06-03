@@ -98,8 +98,11 @@ MAX_RETRIES = 2
 # ============================================================
 # CONTENU
 # ============================================================
-PDF_DIR  = Path("/Users/ayb/Desktop/logiterre-expo/PDF_ACADEMIES")
-LOG_FILE = Path("/Users/ayb/Desktop/logiterre-expo/email_log.json")
+# Chemins relatifs au dossier du script (portable local + cloud)
+_BASE    = Path(__file__).resolve().parent
+PDF_DIR  = _BASE / "PDF_ACADEMIES"
+LOG_FILE = _BASE / "email_log.json"
+PDF_DIR.mkdir(exist_ok=True)
 
 SUBJECT = "Official Invitation – LOGITERRE 2026 Plenary Session & International Transport and Logistics Forum & Exhibition."
 
