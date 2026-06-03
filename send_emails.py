@@ -212,9 +212,22 @@ def build_message(org, recipient_emails, test_mode=False):
                  f'style="display:none" alt="">') if (track_url and track_id) else ""
         unsub = (f'<br><br><span style="font-size:11px;color:#999;">'
                  f'Pour vous désinscrire : <a href="{unsub_link}">cliquez ici</a></span>') if unsub_link else ""
+        # Logo LogiTerre en en-tête (image inline CID — fiable dans la plupart des clients)
+        logo_path = _Path(__file__).resolve().parent / "logo.png"
+        logo_header = ""
+        if logo_path.exists():
+            logo_header = ('<div style="text-align:center;margin-bottom:18px;">'
+                           '<img src="cid:logiterrelogo" style="max-width:300px;width:60%;"></div>')
         html = (f'<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;">'
-                f'{html_body}{cta}{unsub}{pixel}</body></html>')
+                f'{logo_header}{html_body}{cta}{unsub}{pixel}</body></html>')
         msg.add_alternative(html, subtype="html")
+        # Attache le logo en inline (related) à la partie HTML
+        if logo_path.exists():
+            try:
+                html_part = msg.get_payload()[-1]   # la partie HTML qu'on vient d'ajouter
+                html_part.add_related(logo_path.read_bytes(), "image", "png", cid="logiterrelogo")
+            except Exception:
+                pass
 
     # PDF
     pdf_name = f"LOGITERRE_2026_Invitation_{safe_filename(org['short'])}.pdf"

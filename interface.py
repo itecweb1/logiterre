@@ -53,20 +53,31 @@ SOFFICE = str(SKILLS / "scripts/office/soffice.py")
 
 for d in [PDF_DIR, DOCX_DIR, LISTS_DIR]: d.mkdir(exist_ok=True)
 
+# ── Logo officiel LogiTerre (data URI pour affichage HTML) ────
+LOGO_PATH = BASE_DIR / "logo.png"
+def _logo_uri():
+    try:
+        import base64
+        return "data:image/png;base64," + base64.b64encode(LOGO_PATH.read_bytes()).decode()
+    except Exception:
+        return ""
+LOGO_URI = _logo_uri()
+
 # ══ PAGE PUBLIQUE RSVP (via ?rsvp=<id>&org=<nom>&email=<email>) ══
 # Le bouton "Confirm participation" des emails pointe ici. Aucun mot de passe requis.
 _qp = st.query_params
 if _qp.get("rsvp"):
     org_q   = _qp.get("org", "Votre institution")
     email_q = _qp.get("email", "")
-    st.markdown("""<div style='max-width:560px;margin:5vh auto;background:#fff;border-radius:20px;
+    _logo_html = (f"<img src='{LOGO_URI}' style='max-width:280px;width:70%;margin:0 auto .5rem;display:block;'>"
+                  if LOGO_URI else "<div style='text-align:center;font-size:2.5rem;'>🌍</div>")
+    st.markdown(f"""<div style='max-width:560px;margin:5vh auto;background:#fff;border-radius:20px;
       padding:2.5rem;box-shadow:0 20px 60px rgba(0,0,0,.15);'>
-      <div style='text-align:center;font-size:2.5rem;'>🌍</div>
-      <h1 style='text-align:center;font-family:serif;color:#1a1a2e;'>LOGITERRE 2026</h1>
-      <p style='text-align:center;color:#888;'>International Transport &amp; Logistics Forum<br>
+      {_logo_html}
+      <p style='text-align:center;color:#888;margin-top:.3rem;'>International Transport &amp; Logistics Forum<br>
       Casablanca · 20–22 octobre 2026</p>
       <div style='background:#f0eefb;border-radius:10px;padding:.7rem;text-align:center;
-      font-weight:600;color:#3d2f8f;margin:1rem 0;'>%s</div></div>""" % org_q,
+      font-weight:600;color:#3d2f8f;margin:1rem 0;'>{org_q}</div></div>""",
       unsafe_allow_html=True)
     c1,c2,c3 = st.columns([1,3,1])
     with c2:
@@ -105,9 +116,9 @@ def _check_password():
         return True   # local : aucune protection
     if st.session_state.get("auth_ok"):
         return True
-    st.markdown("<div style='max-width:380px;margin:12vh auto;text-align:center;'>"
-                "<div style='font-size:2.5rem;'>🌍</div>"
-                "<h2 style='font-family:serif;'>LOGITERRE 2026</h2>"
+    _lg = (f"<img src='{LOGO_URI}' style='max-width:300px;width:80%;margin:0 auto 1rem;display:block;'>"
+           if LOGO_URI else "<div style='font-size:2.5rem;'>🌍</div><h2 style='font-family:serif;'>LOGITERRE 2026</h2>")
+    st.markdown(f"<div style='max-width:380px;margin:12vh auto;text-align:center;'>{_lg}"
                 "<p style='color:#888;'>Accès réservé — entrez le mot de passe</p></div>",
                 unsafe_allow_html=True)
     c1,c2,c3 = st.columns([1,2,1])
@@ -933,9 +944,11 @@ if "send_list" not in st.session_state: st.session_state["send_list"]=[]
 
 # ══ SIDEBAR ═══════════════════════════════════════════════════
 with st.sidebar:
-    st.markdown("""<div style="text-align:center;padding:1.2rem 0 .8rem;">
-      <div style="font-size:2.5rem;">🌍</div>
-      <div style="font-size:1.1rem;font-weight:800;">LOGITERRE 2026</div>
+    _side_logo = (f"<img src='{LOGO_URI}' style='width:82%;background:#fff;border-radius:10px;"
+                  f"padding:8px;margin-bottom:.5rem;'>" if LOGO_URI
+                  else "<div style='font-size:2.5rem;'>🌍</div>")
+    st.markdown(f"""<div style="text-align:center;padding:1rem 0 .6rem;">
+      {_side_logo}
       <div style="font-size:.75rem;opacity:.5;margin-top:.2rem;">Casablanca • 20–22 Oct 2026</div>
     </div>""",unsafe_allow_html=True)
     st.markdown("---")
