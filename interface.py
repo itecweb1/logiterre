@@ -15,11 +15,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # ── Secrets (Streamlit Cloud) → variables d'environnement ─────
 # En local : utilise les valeurs par défaut. Sur le cloud : lit les Secrets.
 try:
-    for _k in ("SMTP_USER","SMTP_PASSWORD","IMAP_USER","IMAP_PASSWORD","APP_PASSWORD"):
+    for _k in ("SMTP_USER","SMTP_PASSWORD","IMAP_USER","IMAP_PASSWORD","APP_PASSWORD",
+               "SUPABASE_URL","SUPABASE_KEY","APP_URL"):
         if _k in st.secrets:
             os.environ[_k] = str(st.secrets[_k])
 except Exception:
     pass
+
+import supa  # connecteur base persistante (Supabase) — actif si secrets présents
 
 import db                       # SQLite layer
 try:
@@ -49,6 +52,51 @@ PACK    = str(SKILLS / "scripts/office/pack.py")
 SOFFICE = str(SKILLS / "scripts/office/soffice.py")
 
 for d in [PDF_DIR, DOCX_DIR, LISTS_DIR]: d.mkdir(exist_ok=True)
+
+# ══ PAGE PUBLIQUE RSVP (via ?rsvp=<id>&org=<nom>&email=<email>) ══
+# Le bouton "Confirm participation" des emails pointe ici. Aucun mot de passe requis.
+_qp = st.query_params
+if _qp.get("rsvp"):
+    org_q   = _qp.get("org", "Votre institution")
+    email_q = _qp.get("email", "")
+    st.markdown("""<div style='max-width:560px;margin:5vh auto;background:#fff;border-radius:20px;
+      padding:2.5rem;box-shadow:0 20px 60px rgba(0,0,0,.15);'>
+      <div style='text-align:center;font-size:2.5rem;'>🌍</div>
+      <h1 style='text-align:center;font-family:serif;color:#1a1a2e;'>LOGITERRE 2026</h1>
+      <p style='text-align:center;color:#888;'>International Transport &amp; Logistics Forum<br>
+      Casablanca · 20–22 octobre 2026</p>
+      <div style='background:#f0eefb;border-radius:10px;padding:.7rem;text-align:center;
+      font-weight:600;color:#3d2f8f;margin:1rem 0;'>%s</div></div>""" % org_q,
+      unsafe_allow_html=True)
+    c1,c2,c3 = st.columns([1,3,1])
+    with c2:
+        if st.session_state.get("rsvp_done"):
+            st.success("✅ Merci ! Votre réponse a bien été enregistrée.")
+            st.balloons()
+        else:
+            with st.form("rsvp_public"):
+                resp = st.radio("Votre institution participera-t-elle ?",
+                                ["✅ Oui","🤔 Peut-être","❌ Non"], horizontal=True)
+                deleg = st.number_input("Nombre de délégués", 0, 50, 1)
+                spk = st.checkbox("Nous souhaitons proposer un intervenant")
+                note = st.text_area("Message (optionnel)", height=80)
+                if st.form_submit_button("Confirmer ma réponse", type="primary", use_container_width=True):
+                    rmap = {"✅ Oui":"yes","🤔 Peut-être":"maybe","❌ Non":"no"}
+                    saved=False
+                    if supa.enabled():
+                        try:
+                            supa.save_rsvp(org_q, email_q, rmap[resp], deleg, int(spk), note); saved=True
+                        except Exception as e:
+                            st.error(f"Erreur enregistrement : {e}")
+                    if not saved:
+                        try:
+                            db.save_rsvp(None, org_q, email_q, rmap[resp], deleg, int(spk), note); saved=True
+                        except Exception as e:
+                            st.error(f"Erreur : {e}")
+                    if saved:
+                        st.session_state["rsvp_done"]=True
+                        st.rerun()
+    st.stop()
 
 # ── Protection par mot de passe (essentiel si l'app est publique) ──
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "")  # vide = pas de protection (local)
@@ -1352,25 +1400,53 @@ elif "🚀" in page:
         c2.metric("⚠️ Invalides",len(invalid_emails))
         c3.metric("⏱️ Durée estimée",f"~{len(valid)*cfg['delay']//60}min")
 
-        # Test send
+        # Test send — synchrone, feedback fiable
         st.markdown("---")
         st.markdown('<div class="section-title">🧪 Test avant envoi</div>',unsafe_allow_html=True)
         test_em=st.text_input("📧 Envoyer un test à",value=cfg["from_email"],
-                               help="Envoie 1 email de test à cette adresse avec le premier PDF")
-        if st.button("📤 Envoyer le test",use_container_width=True) and valid.shape[0]>0:
+                               help="Envoie 1 email de test à cette adresse (avec le PDF + tracking)")
+        if st.button("📤 Envoyer le test",use_container_width=True,type="primary"):
             if not validate_email(test_em):
                 st.error("❌ Email de test invalide")
             else:
-                with st.spinner(f"Envoi test vers {test_em}..."):
-                    t=threading.Thread(target=send_background,
-                        args=([valid.iloc[0].to_dict()],cfg,test_em),daemon=True)
-                    t.start()
-                    time.sleep(3)
-                    live_t=read_live()
-                    if live_t.get("sent",0)>0:
-                        st.success(f"✅ Test envoyé vers {test_em} !")
-                    elif live_t.get("failed",0)>0:
-                        st.error("❌ Test échoué — voir Watch Live")
+                # nom d'org : 1ère ligne valide, sinon générique
+                test_name = "LOGITERRE — Test"
+                if not valid.empty:
+                    test_name = str(valid.iloc[0].get("name") or "LOGITERRE — Test")
+                with st.spinner(f"Génération PDF + envoi vers {test_em}…"):
+                    try:
+                        import send_emails as se
+                        se.SUBJECT   = cfg["subject"]
+                        se.FROM_NAME = cfg["from_name"]; se.FROM_EMAIL = cfg["from_email"]
+                        se.REPLY_TO  = cfg["reply_to"]
+                        se.CC_EMAILS = []   # pas de CC sur un test
+                        se.TRACK_BASE_URL = cfg.get("track_url","").rstrip("/")
+                        if not se.SMTP_PASSWORD:
+                            st.error("❌ Aucun mot de passe SMTP configuré (.streamlit/secrets.toml ou Secrets)")
+                            st.stop()
+                        short = safe_fn(test_name) or "test"
+                        pdf, perr = make_pdf(test_name, short)
+                        if not pdf:
+                            st.error(f"❌ Échec génération PDF : {perr}")
+                        else:
+                            org = {"short":short,"name":test_name,"emails":[test_em]}
+                            # tracking si activé
+                            if cfg.get("track_url"):
+                                try:
+                                    cid_t = db.get_default_campaign()
+                                    org["track_id"] = db.ensure_contact(cid_t, test_name, test_em)
+                                except: pass
+                            ok, _, serr = se.send_one(org, [test_em], test_mode=True)
+                            if ok:
+                                st.success(f"✅ Test envoyé à {test_em} ! Vérifie ta boîte (et les Promotions/Spam).")
+                                st.balloons()
+                            else:
+                                msg = f"{type(serr).__name__}: {serr}" if serr else "erreur inconnue"
+                                st.error(f"❌ Échec envoi : {msg}")
+                                if serr and "Disabled by user from hPanel" in str(serr):
+                                    st.warning("⛔ Compte Hostinger bloqué — réactive-le dans hPanel → Emails.")
+                    except Exception as e:
+                        st.error(f"❌ Erreur : {type(e).__name__}: {e}")
 
     st.markdown("---")
     # Status + Progress
@@ -1986,8 +2062,17 @@ elif "📨" in page:
 elif "✅" in page:
     page_header("Conversion", "Inscriptions & RSVP", "Qui vient vraiment — le KPI qui compte")
 
-    rstats=db.get_rsvp_stats()
-    rsvps=db.get_rsvps()
+    # Source : Supabase (cloud persistant) si configuré, sinon SQLite local
+    if supa.enabled():
+        rsvps = supa.get_rsvps()
+        st.caption("🟢 Données : Supabase (persistant, cloud)")
+        def _cnt(r): return sum(1 for x in rsvps if x.get("response")==r)
+        rstats = {"total":len(rsvps), "yes":_cnt("yes"), "maybe":_cnt("maybe"), "no":_cnt("no"),
+                  "total_delegates":sum(int(x.get("delegates",0) or 0) for x in rsvps if x.get("response")=="yes"),
+                  "speakers":sum(1 for x in rsvps if x.get("speaker"))}
+    else:
+        rstats=db.get_rsvp_stats()
+        rsvps=db.get_rsvps()
 
     # Funnel global : invités → envoyés → ouverts → réponses → inscrits oui
     log=load_log()

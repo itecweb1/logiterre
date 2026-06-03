@@ -174,28 +174,44 @@ def build_message(org, recipient_emails, test_mode=False):
     body_text = org.get("body_override") or BODY
     track_id  = org.get("track_id")
     track_url = globals().get("TRACK_BASE_URL", "")
+    app_url   = _os.environ.get("APP_URL", "").rstrip("/")   # URL de l'app cloud (RSVP)
+    org_name  = org.get("name", "")
+    to_email  = (recipient_emails[0] if recipient_emails else "")
 
-    # Liens en clair (texte) : inscription + désinscription
-    if track_url and track_id:
-        body_text = body_text + f"\n\n👉 Confirm your participation : {track_url}/register/{track_id}"
-        body_text = body_text + f"\n\n---\nUnsubscribe : {track_url}/u/{track_id}"
+    # Lien RSVP : priorité à l'app cloud (marche sans Mac), sinon serveur tracking
+    import urllib.parse as _up
+    rsvp_link = None
+    if app_url and track_id:
+        q = _up.urlencode({"rsvp": track_id, "org": org_name, "email": to_email})
+        rsvp_link = f"{app_url}/?{q}"
+    elif track_url and track_id:
+        rsvp_link = f"{track_url}/register/{track_id}"
+    unsub_link = f"{track_url}/u/{track_id}" if (track_url and track_id) else None
+
+    # Texte brut
+    if rsvp_link:
+        body_text += f"\n\n👉 Confirm your participation : {rsvp_link}"
+    if unsub_link:
+        body_text += f"\n\n---\nUnsubscribe : {unsub_link}"
 
     msg.set_content(body_text)
 
-    # Version HTML : bouton inscription + pixel d'ouverture + lien désinscription
-    if track_url and track_id:
+    # Version HTML : bouton RSVP + (pixel si serveur tracking) + désinscription
+    if rsvp_link or (track_url and track_id):
         html_body = body_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        # retire les liens texte bruts du HTML (remplacés par un beau bouton)
         html_body = html_body.split("👉 Confirm")[0]
         html_body = html_body.replace("\n", "<br>\n")
-        cta = (f'<div style="text-align:center;margin:24px 0;">'
-               f'<a href="{track_url}/register/{track_id}" '
-               f'style="background:#302b63;color:#fff;text-decoration:none;padding:14px 32px;'
-               f'border-radius:10px;font-weight:bold;font-size:15px;display:inline-block;">'
-               f'✅ Confirm your participation</a></div>')
-        pixel = f'<img src="{track_url}/pixel/{track_id}.png" width="1" height="1" style="display:none" alt="">'
+        cta = ""
+        if rsvp_link:
+            cta = (f'<div style="text-align:center;margin:24px 0;">'
+                   f'<a href="{rsvp_link}" '
+                   f'style="background:#302b63;color:#fff;text-decoration:none;padding:14px 32px;'
+                   f'border-radius:10px;font-weight:bold;font-size:15px;display:inline-block;">'
+                   f'✅ Confirm your participation</a></div>')
+        pixel = (f'<img src="{track_url}/pixel/{track_id}.png" width="1" height="1" '
+                 f'style="display:none" alt="">') if (track_url and track_id) else ""
         unsub = (f'<br><br><span style="font-size:11px;color:#999;">'
-                 f'Pour vous désinscrire : <a href="{track_url}/u/{track_id}">cliquez ici</a></span>')
+                 f'Pour vous désinscrire : <a href="{unsub_link}">cliquez ici</a></span>') if unsub_link else ""
         html = (f'<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;">'
                 f'{html_body}{cta}{unsub}{pixel}</body></html>')
         msg.add_alternative(html, subtype="html")
