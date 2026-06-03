@@ -177,12 +177,13 @@ def build_message(org, recipient_emails, test_mode=False):
     body_text = org.get("body_override") or BODY
     track_id  = org.get("track_id")
     track_url = globals().get("TRACK_BASE_URL", "")
-    app_url   = _os.environ.get("APP_URL", "").rstrip("/")   # URL de l'app cloud (RSVP)
+    app_url   = _os.environ.get("APP_URL", "").rstrip("/")        # URL app cloud (RSVP)
+    supa_url  = _os.environ.get("SUPABASE_URL", "").rstrip("/")   # pixel via Edge Function
     org_name  = org.get("name", "")
     to_email  = (recipient_emails[0] if recipient_emails else "")
+    import urllib.parse as _up
 
     # Lien RSVP : priorité à l'app cloud (marche sans Mac), sinon serveur tracking
-    import urllib.parse as _up
     rsvp_link = None
     if app_url and track_id:
         q = _up.urlencode({"rsvp": track_id, "org": org_name, "email": to_email})
@@ -190,6 +191,14 @@ def build_message(org, recipient_emails, test_mode=False):
     elif track_url and track_id:
         rsvp_link = f"{track_url}/register/{track_id}"
     unsub_link = f"{track_url}/u/{track_id}" if (track_url and track_id) else None
+
+    # Pixel d'ouverture : priorité à la fonction Supabase Edge (100% cloud, sans Mac)
+    pixel_src = None
+    if supa_url and to_email:
+        q = _up.urlencode({"email": to_email, "org": org_name})
+        pixel_src = f"{supa_url}/functions/v1/pixel?{q}"
+    elif track_url and track_id:
+        pixel_src = f"{track_url}/pixel/{track_id}.png"
 
     # Texte brut
     if rsvp_link:
@@ -199,8 +208,8 @@ def build_message(org, recipient_emails, test_mode=False):
 
     msg.set_content(body_text)
 
-    # Version HTML : bouton RSVP + (pixel si serveur tracking) + désinscription
-    if rsvp_link or (track_url and track_id):
+    # Version HTML : bouton RSVP + pixel d'ouverture + désinscription
+    if rsvp_link or pixel_src:
         html_body = body_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         html_body = html_body.split("👉 Confirm")[0]
         html_body = html_body.replace("\n", "<br>\n")
@@ -211,8 +220,8 @@ def build_message(org, recipient_emails, test_mode=False):
                    f'style="background:#302b63;color:#fff;text-decoration:none;padding:14px 32px;'
                    f'border-radius:10px;font-weight:bold;font-size:15px;display:inline-block;">'
                    f'✅ Confirm your participation</a></div>')
-        pixel = (f'<img src="{track_url}/pixel/{track_id}.png" width="1" height="1" '
-                 f'style="display:none" alt="">') if (track_url and track_id) else ""
+        pixel = (f'<img src="{pixel_src}" width="1" height="1" style="display:none" alt="">'
+                 if pixel_src else "")
         unsub = (f'<br><br><span style="font-size:11px;color:#999;">'
                  f'Pour vous désinscrire : <a href="{unsub_link}">cliquez ici</a></span>') if unsub_link else ""
         # Logo LogiTerre en en-tête (image inline CID — fiable dans la plupart des clients)
