@@ -276,13 +276,15 @@ _LOG_LOCK = _thr.Lock()
 _last_ctrl = {"action": "run"}   # dernière action connue (fallback anti-flicker)
 
 import re as _re_md
-_ORIG_MARKDOWN = st.markdown
+# FIX récursion : stocke l'ORIGINAL une seule fois sur le module st (persiste entre reruns).
+# Sans ce garde, chaque rerun re-wrappait le wrapper → récursion infinie sur le cloud.
+if not hasattr(st, "_orig_markdown"):
+    st._orig_markdown = st.markdown
 def _safe_markdown(body, *a, **k):
-    """Patch global : dé-indente le HTML multi-ligne pour éviter que Streamlit
-    le rende en bloc de code (cause des balises affichées en texte brut)."""
+    """Dé-indente le HTML multi-ligne (sinon Streamlit le rend en bloc de code)."""
     if k.get("unsafe_allow_html") and isinstance(body, str) and "\n" in body:
         body = _re_md.sub(r"\n[ \t]+", "\n", body)
-    return _ORIG_MARKDOWN(body, *a, **k)
+    return st._orig_markdown(body, *a, **k)
 st.markdown = _safe_markdown
 
 def H(s):
