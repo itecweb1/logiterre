@@ -11,3 +11,10 @@ DOCX_TEMP_ACAD/
 __pycache__/
 *.pyc
 .DS_Store
+
+# Données / exports / fichiers temporaires — ne pas publier
+/*.csv
+/*.xlsx
+/*.docx
+~$*
+
