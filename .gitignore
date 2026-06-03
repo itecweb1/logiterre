@@ -1,0 +1,13 @@
+# Données sensibles & locales — NE JAMAIS publier
+.streamlit/secrets.toml
+email_log.json
+logiterre.db
+logiterre.db-wal
+logiterre.db-shm
+saved_lists/
+PDF_ACADEMIES/
+DOCX_TEMP_ACAD/
+*.log
+__pycache__/
+*.pyc
+.DS_Store
