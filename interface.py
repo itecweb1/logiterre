@@ -132,30 +132,46 @@ if _qp.get("rsvp"):
                         st.rerun()
     st.stop()
 
-# ── Protection par mot de passe (essentiel si l'app est publique) ──
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "")  # vide = pas de protection (local)
-def _check_password():
-    if not APP_PASSWORD:
-        return True   # local : aucune protection
-    if st.session_state.get("auth_ok"):
+# ── Login utilisateur + mot de passe ──────────────────────────
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "")
+def _get_users():
+    """Dict username→password. Depuis Secrets [users], sinon admin=APP_PASSWORD."""
+    users = {}
+    try:
+        if "users" in st.secrets:
+            users = {str(k): str(v) for k, v in dict(st.secrets["users"]).items()}
+    except Exception:
+        pass
+    if not users and APP_PASSWORD:
+        users = {"admin": APP_PASSWORD}
+    return users
+
+def _check_login():
+    users = _get_users()
+    if not users:
+        return True   # local / non configuré : aucun login
+    if st.session_state.get("auth_user"):
         return True
-    _lg = (f"<img src='{LOGO_URI}' style='max-width:300px;width:80%;margin:0 auto 1rem;display:block;'>"
+    _lg = (f"<img src='{LOGO_URI}' style='max-width:300px;width:80%;margin:0 auto 1.2rem;display:block;'>"
            if LOGO_URI else "<div style='font-size:2.5rem;'>🌍</div><h2 style='font-family:serif;'>LOGITERRE 2026</h2>")
-    st.markdown(f"<div style='max-width:380px;margin:12vh auto;text-align:center;'>{_lg}"
-                "<p style='color:#888;'>Accès réservé — entrez le mot de passe</p></div>",
+    st.markdown(f"<div style='max-width:400px;margin:9vh auto 0;text-align:center;'>{_lg}"
+                "<p style='color:#888;margin-bottom:.5rem;'>Connexion à la plateforme</p></div>",
                 unsafe_allow_html=True)
-    c1,c2,c3 = st.columns([1,2,1])
+    c1, c2, c3 = st.columns([1, 2, 1])
     with c2:
-        pw = st.text_input("Mot de passe", type="password", label_visibility="collapsed")
-        if pw:
-            if pw == APP_PASSWORD:
-                st.session_state["auth_ok"] = True
+        with st.form("login_form"):
+            user = st.text_input("👤 Identifiant", placeholder="Identifiant")
+            pw   = st.text_input("🔒 Mot de passe", type="password", placeholder="Mot de passe")
+            ok   = st.form_submit_button("Se connecter", type="primary", use_container_width=True)
+        if ok:
+            if user in users and pw == users[user]:
+                st.session_state["auth_user"] = user
                 st.rerun()
             else:
-                st.error("Mot de passe incorrect")
+                st.error("❌ Identifiant ou mot de passe incorrect")
     return False
 
-if not _check_password():
+if not _check_login():
     st.stop()
 
 # ── IMAP config ───────────────────────────────────────────────
@@ -1031,6 +1047,13 @@ with st.sidebar:
         "⚙️  Paramètres",
     ],label_visibility="collapsed")
     st.markdown("---")
+    # Utilisateur connecté + déconnexion
+    _cur_user = st.session_state.get("auth_user")
+    if _cur_user:
+        st.markdown(f"""<div style="font-size:.78rem;opacity:.7;text-align:center;padding:.2rem;">
+          👤 Connecté : <b>{_cur_user}</b></div>""",unsafe_allow_html=True)
+        if st.button("🚪 Se déconnecter",use_container_width=True):
+            st.session_state.pop("auth_user",None); st.rerun()
     st.markdown("""<div style="font-size:.68rem;opacity:.3;text-align:center;padding:.3rem;">
       sg@logiterre-expo.com<br>+212 673 642 4246</div>""",unsafe_allow_html=True)
 
