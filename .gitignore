@@ -18,3 +18,7 @@ __pycache__/
 /*.docx
 ~$*
 
+
+# Supabase CLI temp
+supabase/.temp/
+.claude/

@@ -579,6 +579,113 @@ def already_sent_emails():
                 sent.add(e.lower().strip())
     return sent
 
+# ── Agrégation d'engagement (ouvreurs / cliqueurs / désinscrits) ──
+def engagement_data():
+    """Construit une vue unifiée par email : envoyé → ouvert → cliqué → répondu / désinscrit.
+    Source Supabase si dispo (persistant cloud), sinon log local + SQLite.
+    Retourne (rows, stats)."""
+    rows = {}          # email -> dict
+    def _slot(email, org=""):
+        e = (email or "").lower().strip()
+        if not e: return None
+        if e not in rows:
+            rows[e] = {"email": e, "org": org or "", "sent": False, "sent_at": "",
+                       "opens": 0, "open_at": "", "clicks": 0, "click_at": "",
+                       "replied": False, "response": "", "delegates": 0,
+                       "unsub": False, "unsub_reason": ""}
+        if org and not rows[e]["org"]:
+            rows[e]["org"] = org
+        return rows[e]
+
+    if supa.enabled():
+        try: sent_l = supa.get_sent()
+        except Exception: sent_l = []
+        try: opens_l = supa.get_opens()
+        except Exception: opens_l = []
+        try: clicks_l = supa.get_clicks()
+        except Exception: clicks_l = []
+        try: rsvp_l = supa.get_rsvps()
+        except Exception: rsvp_l = []
+        try: unsub_l = supa.get_unsubs()
+        except Exception: unsub_l = []
+        for s in sent_l:
+            r = _slot(s.get("email",""), s.get("org_name",""))
+            if r: r["sent"]=True; r["sent_at"]=r["sent_at"] or (s.get("sent_at","") or "")[:16]
+        for o in opens_l:
+            r = _slot(o.get("email",""), o.get("org_name",""))
+            if r:
+                r["opens"]+=1
+                t=(o.get("created","") or "")[:16]
+                if t and (not r["open_at"] or t<r["open_at"]): r["open_at"]=t
+        for c in clicks_l:
+            r = _slot(c.get("email",""), c.get("org_name",""))
+            if r:
+                r["clicks"]+=1
+                t=(c.get("created","") or "")[:16]
+                if t and (not r["click_at"] or t<r["click_at"]): r["click_at"]=t
+        for v in rsvp_l:
+            r = _slot(v.get("email",""), v.get("org_name",""))
+            if r:
+                r["replied"]=True; r["response"]=v.get("response","") or ""
+                try: r["delegates"]=int(v.get("delegates",0) or 0)
+                except Exception: pass
+        for u in unsub_l:
+            r = _slot(u.get("email",""))
+            if r: r["unsub"]=True; r["unsub_reason"]=u.get("reason","") or ""
+    else:
+        # Fallback local : log global + SQLite
+        for k,v in load_log().items():
+            if v.get("status")=="sent":
+                for e in v.get("to",[]):
+                    r=_slot(e, lookup_name(e))
+                    if r: r["sent"]=True; r["sent_at"]=r["sent_at"] or (v.get("timestamp","") or "")[:16]
+        try:
+            for o in db.get_opens():
+                r=_slot(o.get("email",""), o.get("name","") or o.get("org_name",""))
+                if r: r["opens"]+=1; r["open_at"]=r["open_at"] or (o.get("opened_at","") or "")[:16]
+        except Exception: pass
+        try:
+            for v in db.get_rsvps():
+                r=_slot(v.get("email",""), v.get("org_name",""))
+                if r: r["replied"]=True; r["response"]=v.get("response","") or ""
+        except Exception: pass
+        try:
+            for u in db.get_unsubscribes():
+                r=_slot(u.get("email",""))
+                if r: r["unsub"]=True; r["unsub_reason"]=u.get("reason","") or ""
+        except Exception: pass
+
+    # Score + grade
+    def _grade(r):
+        if r["unsub"]:   return (0,  "🚫 Désinscrit",  "#c8362f")
+        if r["replied"] and (r["response"]=="yes"):
+                          return (100,"🔥 Confirmé",     "#0f8a4f")
+        if r["replied"]: return (85, "🔥 A répondu",    "#0f8a4f")
+        if r["clicks"]>0:return (70, "🔥 Chaud (cliqué)","#d2691e")
+        if r["opens"]>0: return (40, "🌤️ Tiède (ouvert)","#d29922")
+        if r["sent"]:    return (10, "❄️ Froid (envoyé)","#5a6472")
+        return (0, "—", "#888")
+    out=[]
+    for r in rows.values():
+        sc,lbl,clr = _grade(r)
+        r=dict(r); r["score"]=sc; r["grade"]=lbl; r["color"]=clr
+        out.append(r)
+    out.sort(key=lambda x:(-x["score"], x["org"] or "z"))
+
+    n_sent=sum(1 for r in out if r["sent"])
+    n_open=sum(1 for r in out if r["opens"]>0)
+    n_click=sum(1 for r in out if r["clicks"]>0)
+    n_reply=sum(1 for r in out if r["replied"])
+    n_yes=sum(1 for r in out if r["replied"] and r["response"]=="yes")
+    n_unsub=sum(1 for r in out if r["unsub"])
+    stats={"contacts":len(out),"sent":n_sent,"open":n_open,"click":n_click,
+           "reply":n_reply,"yes":n_yes,"unsub":n_unsub,
+           "open_rate":round(n_open*100/max(n_sent,1)),
+           "click_rate":round(n_click*100/max(n_sent,1)),
+           "reply_rate":round(n_reply*100/max(n_sent,1)),
+           "ctr":round(n_click*100/max(n_open,1))}
+    return out, stats
+
 # ── Org database ──────────────────────────────────────────────
 _ORG_DB={}
 def _build_org_db():
@@ -1047,6 +1154,7 @@ with st.sidebar:
         "🚀  Envoyer",
         "🔄  Relances",
         "👁️  Watch Live",
+        "🎯  Engagement",
         "📨  Réponses IA",
         "✅  Inscriptions RSVP",
         "📈  Analytics & Rapport",
@@ -2216,6 +2324,137 @@ elif "✅" in page:
             pd.DataFrame(confirmed)[["org_name","email","delegates","speaker","notes"]].to_csv(buf,index=False)
             st.download_button("⬇️ Exporter les confirmés (CSV)",data=buf.getvalue().encode("utf-8-sig"),
                 file_name="confirmes_logiterre.csv",mime="text/csv",use_container_width=True)
+
+# ════ 🎯 ENGAGEMENT (tracking ouvreurs / cliqueurs / désinscrits) ══
+elif "🎯" in page:
+    page_header("Tracking", "Engagement", "Qui a ouvert · qui a cliqué · qui s'est désinscrit — par email")
+
+    rows, S = engagement_data()
+
+    if not supa.enabled():
+        st.warning("⚠️ Supabase n'est pas configuré : le tracking par email (ouvertures/clics/désinscriptions) "
+                   "fonctionne en mode local seulement. Configure SUPABASE_URL + SUPABASE_KEY dans les Secrets "
+                   "pour un suivi persistant sur le cloud.")
+
+    if not rows:
+        st.info("Aucune donnée d'engagement pour l'instant. Envoie des invitations puis reviens ici : "
+                "tu verras qui ouvre, qui clique et qui se désinscrit, en temps réel.")
+    else:
+        # ── KPI funnel band ───────────────────────────────────────
+        def _bigtile(col,label,val,sub,clr):
+            with col: st.markdown(f"""<div style="background:linear-gradient(135deg,{clr}14,{clr}05);
+              border:1px solid {clr}33;border-left:4px solid {clr};border-radius:12px;padding:.9rem 1rem;">
+              <div style="font-size:.62rem;letter-spacing:.06em;text-transform:uppercase;opacity:.6;">{label}</div>
+              <div style="font-size:1.9rem;font-weight:800;color:{clr};line-height:1.1;">{val}</div>
+              <div style="font-size:.7rem;opacity:.65;">{sub}</div></div>""",unsafe_allow_html=True)
+        c1,c2,c3,c4,c5=st.columns(5)
+        _bigtile(c1,"📤 Envoyés",  S["sent"],  "contacts touchés",            "#6d5ee0")
+        _bigtile(c2,"📨 Ouvreurs", S["open"],  f"{S['open_rate']}% taux d'ouverture","#3d9be0")
+        _bigtile(c3,"🖱️ Cliqueurs",S["click"], f"{S['click_rate']}% · CTR {S['ctr']}%","#d2691e")
+        _bigtile(c4,"✅ Répondus", S["reply"], f"{S['yes']} confirmés",        "#0f8a4f")
+        _bigtile(c5,"🚫 Désinscrits",S["unsub"],"opt-out RGPD",                "#c8362f")
+
+        # ── Funnel barre horizontale ─────────────────────────────
+        st.markdown("")
+        def _fbar(label,val,base,clr):
+            pct=int(val/max(base,1)*100)
+            return (f'<div style="display:flex;align-items:center;gap:.7rem;margin:.28rem 0;">'
+                    f'<span style="width:120px;font-size:.8rem;opacity:.8;text-align:right;">{label}</span>'
+                    f'<span style="flex:1;background:rgba(128,128,128,.13);border-radius:6px;height:22px;overflow:hidden;">'
+                    f'<span style="display:block;height:100%;width:{pct}%;background:{clr};border-radius:6px;"></span></span>'
+                    f'<span style="width:70px;font-size:.82rem;font-weight:700;">{val} · {pct}%</span></div>')
+        H('<div class="panel"><div class="panel-title">🔻 Entonnoir d\'engagement</div>'
+          +_fbar("Envoyés",S["sent"],S["sent"],"#6d5ee0")
+          +_fbar("Ouvreurs",S["open"],S["sent"],"#3d9be0")
+          +_fbar("Cliqueurs",S["click"],S["sent"],"#d2691e")
+          +_fbar("Répondus",S["reply"],S["sent"],"#0f8a4f")
+          +_fbar("Confirmés",S["yes"],S["sent"],"#0a6e3e")
+          +'</div>')
+
+        # ── Filtre + recherche ───────────────────────────────────
+        st.markdown("---")
+        fc1,fc2=st.columns([2,3])
+        with fc1:
+            seg=st.radio("Filtrer",["🌍 Tous","📨 Ouvreurs","🖱️ Cliqueurs","✅ Répondus",
+                                     "🚫 Désinscrits","❄️ Jamais ouvert"],horizontal=False)
+        with fc2:
+            q=st.text_input("🔎 Rechercher (email ou organisation)","").lower().strip()
+
+        def _keep(r):
+            if seg=="📨 Ouvreurs"      and not r["opens"]>0: return False
+            if seg=="🖱️ Cliqueurs"    and not r["clicks"]>0: return False
+            if seg=="✅ Répondus"      and not r["replied"]: return False
+            if seg=="🚫 Désinscrits"   and not r["unsub"]: return False
+            if seg=="❄️ Jamais ouvert" and not (r["sent"] and r["opens"]==0 and not r["unsub"]): return False
+            if q and q not in r["email"] and q not in (r["org"] or "").lower(): return False
+            return True
+        view=[r for r in rows if _keep(r)]
+
+        st.markdown(f"<div style='font-size:.8rem;opacity:.6;margin:.3rem 0;'>{len(view)} contact(s) affiché(s)</div>",
+                    unsafe_allow_html=True)
+
+        # ── Tableau unifié (le parcours de chaque contact) ───────
+        def _ic(b): return "✅" if b else "·"
+        tdf=pd.DataFrame([{
+            "Grade":r["grade"],
+            "Organisation":r["org"] or "—",
+            "Email":r["email"],
+            "📤":_ic(r["sent"]),
+            "📨 Ouvert":(f'{r["opens"]}×' if r["opens"] else "·"),
+            "🖱️ Cliqué":(f'{r["clicks"]}×' if r["clicks"] else "·"),
+            "✅ Répondu":({"yes":"✅ Oui","no":"❌ Non"}.get(r["response"],"·") if r["replied"] else "·"),
+            "🚫":("🚫" if r["unsub"] else "·"),
+            "Dernière activité":(r["click_at"] or r["open_at"] or r["sent_at"] or ""),
+        } for r in view])
+        st.dataframe(tdf,use_container_width=True,hide_index=True,height=460,
+            column_config={"Grade":st.column_config.TextColumn(width="small"),
+                           "Email":st.column_config.TextColumn(width="medium")})
+
+        # ── Export CSV complet ───────────────────────────────────
+        buf=io.StringIO()
+        pd.DataFrame([{"organisation":r["org"],"email":r["email"],"grade":r["grade"],
+            "score":r["score"],"envoye":r["sent"],"ouvertures":r["opens"],"clics":r["clicks"],
+            "repondu":r["replied"],"reponse":r["response"],"delegues":r["delegates"],
+            "desinscrit":r["unsub"],"raison_desinscription":r["unsub_reason"],
+            "envoye_le":r["sent_at"],"premiere_ouverture":r["open_at"],
+            "premier_clic":r["click_at"]} for r in view]).to_csv(buf,index=False)
+        st.download_button("⬇️ Exporter cette vue (CSV complet)",buf.getvalue().encode("utf-8-sig"),
+            "engagement_logiterre.csv","text/csv",use_container_width=True)
+
+        # ── 3 listes ciblées : ouvreurs / cliqueurs / désinscrits ─
+        st.markdown("---")
+        st.markdown('<div class="section-title">🎯 Listes d\'action</div>',unsafe_allow_html=True)
+        t1,t2,t3=st.tabs([f"🖱️ Cliqueurs ({S['click']})",
+                          f"📨 Ouvreurs non-cliqueurs ({sum(1 for r in rows if r['opens']>0 and r['clicks']==0 and not r['unsub'])})",
+                          f"🚫 Désinscrits ({S['unsub']})"])
+        with t1:
+            st.caption("Tes contacts les plus chauds — ils ont cliqué le lien. À relancer en priorité.")
+            hot=[r for r in rows if r["clicks"]>0]
+            if hot:
+                st.dataframe(pd.DataFrame([{"Organisation":r["org"] or "—","Email":r["email"],
+                    "Clics":r["clicks"],"A répondu":("✅" if r["replied"] else "—"),
+                    "Date":r["click_at"]} for r in hot]),use_container_width=True,hide_index=True)
+            else: st.caption("Aucun clic pour l'instant.")
+        with t2:
+            st.caption("Ils ont ouvert mais pas encore cliqué — un rappel ciblé peut les convertir.")
+            warm=[r for r in rows if r["opens"]>0 and r["clicks"]==0 and not r["unsub"]]
+            if warm:
+                st.dataframe(pd.DataFrame([{"Organisation":r["org"] or "—","Email":r["email"],
+                    "Ouvertures":r["opens"],"Date":r["open_at"]} for r in warm]),
+                    use_container_width=True,hide_index=True)
+                wbuf=io.StringIO()
+                pd.DataFrame([{"organisation":r["org"],"email":r["email"]} for r in warm]).to_csv(wbuf,index=False)
+                st.download_button("⬇️ Liste de relance (CSV)",wbuf.getvalue().encode("utf-8-sig"),
+                    "relance_ouvreurs.csv","text/csv")
+            else: st.caption("Personne dans ce segment.")
+        with t3:
+            st.caption("Désinscrits — NE PAS recontacter (conformité RGPD).")
+            outs=[r for r in rows if r["unsub"]]
+            if outs:
+                st.dataframe(pd.DataFrame([{"Organisation":r["org"] or "—","Email":r["email"],
+                    "Raison":r["unsub_reason"] or "—"} for r in outs]),
+                    use_container_width=True,hide_index=True)
+            else: st.caption("Aucune désinscription. 👍")
 
 # ════ 📈 ANALYTICS & RAPPORT ══════════════════════════════════
 elif "📈" in page:
