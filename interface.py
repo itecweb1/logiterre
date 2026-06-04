@@ -678,8 +678,9 @@ def engagement_data():
     n_reply=sum(1 for r in out if r["replied"])
     n_yes=sum(1 for r in out if r["replied"] and r["response"]=="yes")
     n_unsub=sum(1 for r in out if r["unsub"])
+    n_deleg=sum(r["delegates"] for r in out if r["replied"] and r["response"]=="yes")
     stats={"contacts":len(out),"sent":n_sent,"open":n_open,"click":n_click,
-           "reply":n_reply,"yes":n_yes,"unsub":n_unsub,
+           "reply":n_reply,"yes":n_yes,"unsub":n_unsub,"deleg":n_deleg,
            "open_rate":round(n_open*100/max(n_sent,1)),
            "click_rate":round(n_click*100/max(n_sent,1)),
            "reply_rate":round(n_reply*100/max(n_sent,1)),
@@ -1178,19 +1179,38 @@ if "🏠" in page:
     page_header("Campagne · Casablanca 2026", "Tableau de bord",
                 "Vue d'ensemble de la campagne d'invitations LOGITERRE 2026")
 
-    # Données
+    # Données — Supabase (persistant cloud) si dispo, sinon SQLite/log local
     sa=total_sent()
     fa=sum(1 for v in log.values() if v.get("status")=="failed")
     rate=f"{sa*100//max(sa+fa,1)}%" if (sa+fa)>0 else "—"
-    opens=db.get_opens(); n_open=len(opens)
-    rstats=db.get_rsvp_stats(); n_rsvp=rstats.get("total",0) or 0; n_yes=rstats.get("yes",0) or 0
-    n_deleg=rstats.get("total_delegates",0) or 0
-    n_unsub=len(db.get_unsubscribes())
+    if supa.enabled():
+        _rows, _S = engagement_data()
+        n_open=_S["open"]; n_click=_S["click"]; n_rsvp=_S["reply"]
+        n_yes=_S["yes"]; n_deleg=_S["deleg"]; n_unsub=_S["unsub"]
+        if _S["sent"]>sa: sa=_S["sent"]
+    else:
+        opens=db.get_opens(); n_open=len(opens); n_click=0
+        rstats=db.get_rsvp_stats(); n_rsvp=rstats.get("total",0) or 0; n_yes=rstats.get("yes",0) or 0
+        n_deleg=rstats.get("total_delegates",0) or 0
+        n_unsub=len(db.get_unsubscribes())
+
+    # Liste unifiée des envois (Supabase si cloud, sinon log local)
+    if supa.enabled():
+        try:
+            _sent_src=supa.get_sent()
+            sent_events=[{"name":(r.get("org_name") or r.get("email","?")),
+                          "email":r.get("email",""),"ts":(r.get("sent_at","") or "").replace("T"," ")}
+                         for r in _sent_src if (r.get("status","sent")=="sent")]
+        except Exception:
+            sent_events=[]
+    else:
+        sent_events=[{"name":k.replace("PRUDENT_","").replace("UMF_","").replace("IFACE_","").replace("PRIORITY_",""),
+                      "email":(v.get("to",[""])[0] if v.get("to") else ""),"ts":v.get("timestamp","")}
+                     for k,v in log.items() if v.get("status")=="sent"]
 
     # Sparkline : 14 derniers jours d'activité
     from collections import Counter as _Ck
-    dcount=_Ck(v.get("timestamp","")[:10] for v in log.values()
-               if v.get("status")=="sent" and v.get("timestamp"))
+    dcount=_Ck(e["ts"][:10] for e in sent_events if e.get("ts"))
     days=sorted(dcount.items())[-14:]
     mx=max([n for _,n in days],default=1)
     spark="".join(f'<span style="height:{max(8,int(n/mx*42))}px"></span>' for _,n in days) or '<span></span>'
@@ -1202,6 +1222,7 @@ if "🏠" in page:
                 f'<span class="fr-bar"><span class="fr-fill" style="width:{pct}%;background:{color};"></span></span>'
                 f'<span class="fr-val">{val}</span></div>')
     funnel_html=(fr("Envoyés",sa,sa,"#6d5ee0")+fr("Ouverts",n_open,sa,"#3d9be0")
+                 +fr("Cliqués",n_click,sa,"#d2691e")
                  +fr("Réponses",n_rsvp,sa,"#d2a017")+fr("Confirmés",n_yes,sa,"#0f8a4f"))
     H(f"""<div class="heroband">
     <div class="hb-left">
@@ -1216,11 +1237,12 @@ if "🏠" in page:
     </div></div>""")
 
     # ── KPI tiles ─────────────────────────────────────────────
-    c1,c2,c3,c4=st.columns(4)
+    c1,c2,c3,c4,c5=st.columns(5)
     with c1: kpi("Confirmés", n_yes, f"{n_deleg} délégués attendus", "#0f8a4f")
     with c2: kpi("Ouvertures", n_open, "suivi pixel", "#3d9be0")
-    with c3: kpi("Échecs", fa, "à relancer", "#c8362f")
-    with c4: kpi("Désinscrits", n_unsub, "RGPD", "#8a90a0")
+    with c3: kpi("Clics", n_click, "ont cliqué le lien", "#d2691e")
+    with c4: kpi("Échecs", fa, "à relancer", "#c8362f")
+    with c5: kpi("Désinscrits", n_unsub, "RGPD", "#8a90a0")
 
     st.markdown("")
     ca,cb=st.columns([3,2])
@@ -1233,15 +1255,13 @@ if "🏠" in page:
             st.info("Pas encore d'envois enregistrés.")
     with cb:
         H('<div class="panel-title">Derniers envois</div>')
-        recent=sorted([(k,v) for k,v in log.items() if v.get("status")=="sent"],
-                      key=lambda x:x[1].get("timestamp",""),reverse=True)[:7]
+        recent=sorted(sent_events,key=lambda e:e.get("ts",""),reverse=True)[:7]
         if recent:
             rows="".join(
                 f'<div class="feed-item"><div style="display:flex;align-items:center;overflow:hidden;">'
-                f'<span class="fi-dot"></span><span class="fi-name">'
-                f'{k.replace("PRUDENT_","").replace("UMF_","").replace("IFACE_","").replace("PRIORITY_","")[:30]}'
-                f'</span></div><span class="fi-time">{v.get("timestamp","")[5:16]}</span></div>'
-                for k,v in recent)
+                f'<span class="fi-dot"></span><span class="fi-name">{(e["name"] or e["email"])[:30]}'
+                f'</span></div><span class="fi-time">{e.get("ts","")[5:16]}</span></div>'
+                for e in recent)
             H(f'<div class="panel">{rows}</div>')
         else:
             st.info("Aucun envoi.")
