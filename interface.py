@@ -92,6 +92,14 @@ if _qp.get("unsub"):
 if _qp.get("rsvp"):
     org_q   = _qp.get("org", "Votre institution")
     email_q = _qp.get("email", "")
+    # Enregistre le CLIC (une fois) — arriver ici = avoir cliqué le bouton
+    if not st.session_state.get("click_logged"):
+        st.session_state["click_logged"] = True
+        try:
+            if supa.enabled() and email_q:
+                supa.record_click(email_q, org_q, "rsvp")
+        except Exception:
+            pass
     _logo_html = (f"<img src='{LOGO_URI}' style='max-width:280px;width:70%;margin:0 auto .5rem;display:block;'>"
                   if LOGO_URI else "<div style='text-align:center;font-size:2.5rem;'>🌍</div>")
     st.markdown(f"""<div style='max-width:560px;margin:5vh auto;background:#fff;border-radius:20px;
@@ -2258,6 +2266,44 @@ elif "📈" in page:
         "Nombre":[total,sent,sent-bounced,opened,replied]
     })
     st.bar_chart(funnel.set_index("Étape"),color="#302b63",height=240)
+
+    # ── Détail engagement : qui a OUVERT / qui a CLIQUÉ ───────
+    st.markdown("---")
+    st.markdown('<div class="section-title">📨 Qui a ouvert / cliqué</div>',unsafe_allow_html=True)
+    if supa.enabled():
+        opens_l = supa.get_opens()
+        clicks_l = supa.get_clicks()
+        rsvps_l = supa.get_rsvps()
+        eo,ec = st.columns(2)
+        with eo:
+            st.markdown(f"**📨 Ouvertures ({len(opens_l)})**")
+            if opens_l:
+                st.dataframe(pd.DataFrame([{"Email":o.get("email",""),
+                    "Organisation":o.get("org_name",""),"Date":(o.get("created","") or "")[:16]}
+                    for o in opens_l]),use_container_width=True,hide_index=True,height=260)
+            else: st.caption("Aucune ouverture pour l'instant.")
+        with ec:
+            st.markdown(f"**🖱️ Clics sur le bouton ({len(clicks_l)})**")
+            if clicks_l:
+                rsvp_emails={r.get("email","").lower() for r in rsvps_l}
+                st.dataframe(pd.DataFrame([{"Email":c.get("email",""),
+                    "Organisation":c.get("org_name",""),
+                    "A répondu":"✅" if c.get("email","").lower() in rsvp_emails else "—",
+                    "Date":(c.get("created","") or "")[:16]}
+                    for c in clicks_l]),use_container_width=True,hide_index=True,height=260)
+            else: st.caption("Aucun clic pour l'instant.")
+        # Export
+        if opens_l or clicks_l:
+            import io as _io
+            buf=_io.StringIO()
+            pd.DataFrame([{"type":"open","email":o.get("email",""),"org":o.get("org_name",""),
+                "date":o.get("created","")} for o in opens_l]+
+                [{"type":"click","email":c.get("email",""),"org":c.get("org_name",""),
+                "date":c.get("created","")} for c in clicks_l]).to_csv(buf,index=False)
+            st.download_button("⬇️ Exporter ouvertures + clics (CSV)",buf.getvalue().encode("utf-8-sig"),
+                "engagement_logiterre.csv","text/csv")
+    else:
+        st.info("Le détail par email (ouvertures/clics) nécessite Supabase configuré (Secrets).")
 
     # Répartition par type
     type_counts=Counter(c.get("org_type","general") for c in contacts)

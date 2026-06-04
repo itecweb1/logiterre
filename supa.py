@@ -78,6 +78,19 @@ def get_opens():
     except Exception:
         return []
 
+def record_click(email, org_name="", kind="rsvp"):
+    """Enregistre un clic (clic sur le bouton = a cliqué le lien)."""
+    try:
+        return insert("clicks", {"email": email, "org_name": org_name, "kind": kind})
+    except Exception:
+        return None
+
+def get_clicks():
+    try:
+        return select("clicks", "select=*&order=created.desc")
+    except Exception:
+        return []
+
 # ── Journal d'envoi (persistant, remplace email_log.json sur le cloud) ──
 def log_sent(email, org_name="", cc="", status="sent"):
     try:
