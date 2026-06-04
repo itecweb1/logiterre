@@ -77,3 +77,60 @@ def get_opens():
         return select("opens", "select=*&order=created.desc")
     except Exception:
         return []
+
+# ── Journal d'envoi (persistant, remplace email_log.json sur le cloud) ──
+def log_sent(email, org_name="", cc="", status="sent"):
+    try:
+        return insert("sent_log", {"email": email, "org_name": org_name,
+                                    "cc": cc, "status": status})
+    except Exception:
+        return None
+
+def get_sent():
+    try:
+        return select("sent_log", "select=*&order=sent_at.desc")
+    except Exception:
+        return []
+
+def sent_emails_set():
+    """Set des emails déjà envoyés (pour dédup)."""
+    try:
+        rows = select("sent_log", "select=email&status=eq.sent")
+        return {r["email"].lower().strip() for r in rows if r.get("email")}
+    except Exception:
+        return set()
+
+def messages_today(per_msg_default=1):
+    """Nombre de messages envoyés aujourd'hui (To + CC) pour le quota Hostinger."""
+    import datetime
+    today = datetime.date.today().isoformat()
+    try:
+        rows = select("sent_log", f"select=cc,sent_at&status=eq.sent&sent_at=gte.{today}")
+        n = 0
+        for r in rows:
+            cc = (r.get("cc") or "")
+            cc_n = len([x for x in cc.split(",") if x.strip()]) if cc else 0
+            n += 1 + cc_n
+        return n
+    except Exception:
+        return 0
+
+# ── Désinscriptions (persistant, RGPD) ────────────────────────
+def add_unsub(email, reason="link"):
+    try:
+        return insert("unsubscribes", {"email": email.lower().strip(), "reason": reason})
+    except Exception:
+        return None
+
+def is_unsub(email):
+    try:
+        rows = select("unsubscribes", f"select=email&email=eq.{email.lower().strip()}")
+        return len(rows) > 0
+    except Exception:
+        return False
+
+def get_unsubs():
+    try:
+        return select("unsubscribes", "select=*&order=added_at.desc")
+    except Exception:
+        return []

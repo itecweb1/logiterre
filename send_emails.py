@@ -185,12 +185,18 @@ def build_message(org, recipient_emails, test_mode=False):
 
     # Lien RSVP : priorité à l'app cloud (marche sans Mac), sinon serveur tracking
     rsvp_link = None
-    if app_url and track_id:
-        q = _up.urlencode({"rsvp": track_id, "org": org_name, "email": to_email})
+    if app_url and to_email:
+        q = _up.urlencode({"rsvp": track_id or 1, "org": org_name, "email": to_email})
         rsvp_link = f"{app_url}/?{q}"
     elif track_url and track_id:
         rsvp_link = f"{track_url}/register/{track_id}"
-    unsub_link = f"{track_url}/u/{track_id}" if (track_url and track_id) else None
+    # Désinscription : app cloud (?unsub=email) si dispo, sinon serveur tracking
+    if app_url and to_email:
+        unsub_link = f"{app_url}/?{_up.urlencode({'unsub': to_email})}"
+    elif track_url and track_id:
+        unsub_link = f"{track_url}/u/{track_id}"
+    else:
+        unsub_link = None
 
     # Pixel d'ouverture : priorité à la fonction Supabase Edge (100% cloud, sans Mac)
     pixel_src = None

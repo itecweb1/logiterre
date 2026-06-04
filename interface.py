@@ -66,6 +66,29 @@ LOGO_URI = _logo_uri()
 # ══ PAGE PUBLIQUE RSVP (via ?rsvp=<id>&org=<nom>&email=<email>) ══
 # Le bouton "Confirm participation" des emails pointe ici. Aucun mot de passe requis.
 _qp = st.query_params
+
+# ── Page publique DÉSINSCRIPTION (via ?unsub=<email>) ──────────
+if _qp.get("unsub"):
+    email_u = _qp.get("unsub", "")
+    done = False
+    try:
+        if supa.enabled(): supa.add_unsub(email_u, "link"); done = True
+    except Exception: pass
+    if not done:
+        try: db.mark_unsubscribe(email_u, "link"); done = True
+        except Exception: pass
+    _lg = (f"<img src='{LOGO_URI}' style='max-width:260px;width:65%;margin:0 auto 1rem;display:block;'>"
+           if LOGO_URI else "<div style='font-size:2.5rem;text-align:center;'>🌍</div>")
+    st.markdown(f"""<div style='max-width:520px;margin:8vh auto;background:#fff;border-radius:20px;
+      padding:2.5rem;box-shadow:0 20px 60px rgba(0,0,0,.15);text-align:center;'>
+      {_lg}
+      <h2 style='color:#1a1a2e;font-family:serif;'>Désinscription confirmée</h2>
+      <p style='color:#555;'>L'adresse <b>{email_u}</b> ne recevra plus d'emails de LOGITERRE 2026.
+      Nous respectons votre choix.</p>
+      <p style='color:#aaa;font-size:.8rem;margin-top:1.5rem;'>LOGITERRE 2026 — sg@logiterre-expo.com</p>
+      </div>""", unsafe_allow_html=True)
+    st.stop()
+
 if _qp.get("rsvp"):
     org_q   = _qp.get("org", "Votre institution")
     email_q = _qp.get("email", "")
@@ -392,7 +415,10 @@ PLAN_LIMITS = {
 
 def messages_today():
     """Nombre de MESSAGES envoyés aujourd'hui (chaque destinataire + CC compte).
-    C'est l'unité que Hostinger limite."""
+    C'est l'unité que Hostinger limite. Supabase si dispo (persistant cloud)."""
+    if supa.enabled():
+        try: return supa.messages_today()
+        except Exception: pass
     today = time.strftime("%Y-%m-%d")
     n = 0
     for v in load_log().values():
@@ -509,8 +535,18 @@ def safe_fn(s): return re.sub(r"[^A-Za-z0-9_-]+","_",s).strip("_")[:60]
 def xml_escape(s):
     return s.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
 
+def total_sent():
+    """Nombre total d'emails envoyés. Supabase si dispo (persistant cloud)."""
+    if supa.enabled():
+        try: return len(supa.get_sent())
+        except Exception: pass
+    return sum(1 for v in load_log().values() if v.get("status")=="sent")
+
 def already_sent_emails():
-    """Set de tous les emails déjà envoyés."""
+    """Set de tous les emails déjà envoyés. Supabase si dispo (persistant cloud)."""
+    if supa.enabled():
+        try: return supa.sent_emails_set()
+        except Exception: pass
     log=load_log()
     sent=set()
     for v in log.values():
@@ -811,10 +847,11 @@ def send_background(targets, cfg, test_email=None):
                     write_live(live); continue
             except Exception: pass
 
-        # Skip if unsubscribed (RGPD) — compté comme "ignoré"
+        # Skip if unsubscribed (RGPD) — compté comme "ignoré". Supabase si dispo.
         if not test_email:
             try:
-                if db.is_unsubscribed(email):
+                unsub = supa.is_unsub(email) if supa.enabled() else db.is_unsubscribed(email)
+                if unsub:
                     live["skipped"]=live.get("skipped",0)+1
                     live["log"].insert(0,{"ts":ts,"status":"info","msg":f"🚫 Désinscrit : {name[:35]}"})
                     write_live(live); continue
@@ -865,6 +902,10 @@ def send_background(targets, cfg, test_email=None):
                 append_log_entry(f"IFACE_{short}",
                     {"status":"sent","to":[email],"cc":se.CC_EMAILS,
                      "timestamp":time.strftime("%Y-%m-%d %H:%M:%S")})
+                # Supabase : journal persistant cloud (dédup + quota survivent au redémarrage)
+                if supa.enabled():
+                    try: supa.log_sent(email, name, ",".join(se.CC_EMAILS))
+                    except Exception: pass
                 # DB : marque envoyé + planifie relance
                 if contact_db_id:
                     try:
@@ -956,7 +997,7 @@ with st.sidebar:
     st.markdown("---")
     live=read_live(); status=live.get("status","idle")
     log=load_log()
-    sent_c=sum(1 for v in log.values() if v.get("status")=="sent")
+    sent_c=total_sent()
     pdf_c=len(list(PDF_DIR.glob("*.pdf")))
     STATUS_ICONS={"running":"🟢","paused":"🟡","stopped":"🔴","done":"✅","idle":"⚪"}
     STATUS_LABELS={"running":"En cours","paused":"En pause","stopped":"Arrêté","done":"Terminé","idle":"Inactif"}
@@ -999,7 +1040,7 @@ if "🏠" in page:
                 "Vue d'ensemble de la campagne d'invitations LOGITERRE 2026")
 
     # Données
-    sa=sum(1 for v in log.values() if v.get("status")=="sent")
+    sa=total_sent()
     fa=sum(1 for v in log.values() if v.get("status")=="failed")
     rate=f"{sa*100//max(sa+fa,1)}%" if (sa+fa)>0 else "—"
     opens=db.get_opens(); n_open=len(opens)
@@ -2091,7 +2132,7 @@ elif "✅" in page:
 
     # Funnel global : invités → envoyés → ouverts → réponses → inscrits oui
     log=load_log()
-    n_sent=sum(1 for v in log.values() if v.get("status")=="sent")
+    n_sent=total_sent()
     opens=db.get_opens()
     n_open=len(opens)
     n_rsvp=rstats.get("total",0) or 0
