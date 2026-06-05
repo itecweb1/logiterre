@@ -104,34 +104,44 @@ PDF_DIR  = _BASE / "PDF_ACADEMIES"
 LOG_FILE = _BASE / "email_log.json"
 PDF_DIR.mkdir(exist_ok=True)
 
-SUBJECT = "Official Invitation – LOGITERRE 2026 Plenary Session & International Transport and Logistics Forum & Exhibition."
+SUBJECT = "Exploring Participation Opportunities at LOGITERRE 2026."
+
+# Lien public (rendu cliquable + traçable via l'Edge Function `click` si Supabase dispo)
+LINKTR_URL = "https://linktr.ee/LOGITERRE"
+
+# Joindre le PDF d'invitation ? (désactivable par campagne via cfg/env ATTACH_PDF=0)
+ATTACH_PDF = _os.environ.get("ATTACH_PDF", "1").strip().lower() not in ("0", "false", "no", "")
 
 BODY = """Dear Sir / Madam,
 
 I hope this message finds you well.
 
-On behalf of the LOGITERRE 2026 Organizing Committee, it is my great honor to share with you the attached official invitation letter regarding the Third Edition of the International LOGITERRE Forum & Exhibition, scheduled to take place in Casablanca, Kingdom of Morocco, from 20 to 22 October 2026.
+I am reaching out regarding LOGITERRE 2026, the International Forum & Exhibition on Transport, Logistics, Smart Mobility and Sustainable Infrastructure, taking place in Casablanca, Morocco, from 20 to 22 October 2026.
 
-Organized under the High Patronage of His Majesty King Mohammed VI, LOGITERRE 2026 will convene high-level institutional leaders, policymakers, international organizations, academia, research centers, infrastructure experts, and major industry stakeholders to discuss the future of transport, logistics, smart mobility, sustainable infrastructure, and strategic connectivity ecosystems across Africa and the global economy.
+LOGITERRE 2026 will bring together public authorities, international organizations, infrastructure developers, logistics operators, technology providers, investors and industry leaders from across Africa and beyond.
 
-Considering the recognized expertise and international standing of your esteemed institution, we would be profoundly honored to welcome your participation and valuable contribution to this major international gathering.
+Having noted your company's presence within the sector and participation in major international exhibitions, I believe there may be valuable opportunities for your organization to connect with key stakeholders and explore new business partnerships through LOGITERRE 2026.
 
-Please find attached for your kind consideration:
-  - Official Invitation Letter
-  - LOGITERRE 2026 Presentation Brochure
-  - Concept Note
-  - https://linktr.ee/LOGITERRE.PRO
+We would be pleased to discuss potential participation as an exhibitor, sponsor, speaker or institutional partner.
 
-We remain entirely at your disposal for any further information, coordination, or discussions regarding participation modalities, speaking opportunities, institutional partnerships, or cooperation frameworks.
+For more information about the event, please visit:
 
-We sincerely look forward to the privilege of welcoming your esteemed institution to Casablanca - LOGITERRE 2026.
+https://linktr.ee/LOGITERRE
 
-With highest consideration and respect,
+Should you wish to receive the Exhibitor Brochure and Partnership Opportunities, simply reply to this email and our team will be delighted to assist you.
 
-Office of the Secretary General
+Thank you for your time and consideration.
+
+I look forward to hearing from you.
+
+Kind regards,
+
+EZZAHRAOUI AYOUB
+International Relations & Development
 LOGITERRE 2026 Organizing Committee
+Casablanca, Kingdom of Morocco
 Email: sg@logiterre-expo.com
-Tel / WhatsApp / WeChat / Telegram: +212 673 642 4246
+Tel / WhatsApp: +212 673 642 4246.
 """
 
 # ============================================================
@@ -155,7 +165,7 @@ def save_log(log):
     LOG_FILE.write_text(json.dumps(log, indent=2, ensure_ascii=False))
 
 
-def build_message(org, recipient_emails, test_mode=False):
+def build_message(org, recipient_emails, test_mode=False, attach_pdf=None):
     msg = EmailMessage()
 
     # En-têtes anti-spam : format professionnel
@@ -183,13 +193,6 @@ def build_message(org, recipient_emails, test_mode=False):
     to_email  = (recipient_emails[0] if recipient_emails else "")
     import urllib.parse as _up
 
-    # Lien RSVP : priorité à l'app cloud (marche sans Mac), sinon serveur tracking
-    rsvp_link = None
-    if app_url and to_email:
-        q = _up.urlencode({"rsvp": track_id or 1, "org": org_name, "email": to_email})
-        rsvp_link = f"{app_url}/?{q}"
-    elif track_url and track_id:
-        rsvp_link = f"{track_url}/register/{track_id}"
     # Désinscription : app cloud (?unsub=email) si dispo, sinon serveur tracking
     if app_url and to_email:
         unsub_link = f"{app_url}/?{_up.urlencode({'unsub': to_email})}"
@@ -212,9 +215,15 @@ def build_message(org, recipient_emails, test_mode=False):
     elif track_url and track_id:
         pixel_src = f"{track_url}/pixel/{track_id}.png"
 
-    # Texte brut
-    if rsvp_link:
-        body_text += f"\n\n👉 Confirm your participation : {rsvp_link}"
+    # Lien linktr.ee : traçable via l'Edge Function `click` (enregistre le clic PUIS redirige 302)
+    if supa_url and to_email:
+        q = _up.urlencode({"email": to_email, "org": org_name, "to": "linktr"})
+        link_target = f"{supa_url}/functions/v1/click?{q}"
+    else:
+        link_target = LINKTR_URL
+
+    # Texte brut : corps + pied de page de désinscription (sans toucher au corps lui-même)
+    pure_body = body_text
     if unsub_link:
         body_text += ("\n\n--------------------------------------------------\n"
                       "LOGITERRE 2026 — Forum-Salon International\n"
@@ -225,18 +234,16 @@ def build_message(org, recipient_emails, test_mode=False):
 
     msg.set_content(body_text)
 
-    # Version HTML : bouton RSVP + pixel d'ouverture + désinscription
-    if rsvp_link or pixel_src:
-        html_body = body_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        html_body = html_body.split("👉 Confirm")[0]
+    # Version HTML : corps + lien linktr.ee traçable + pixel d'ouverture + désinscription
+    if True:
+        html_body = pure_body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         html_body = html_body.replace("\n", "<br>\n")
+        # Rend le lien linktr.ee cliquable ET traçable (via Edge Function click)
+        html_body = html_body.replace(
+            LINKTR_URL,
+            f'<a href="{link_target}" style="color:#302b63;font-weight:bold;text-decoration:none;">'
+            f'{LINKTR_URL}</a>')
         cta = ""
-        if rsvp_link:
-            cta = (f'<div style="text-align:center;margin:24px 0;">'
-                   f'<a href="{rsvp_link}" '
-                   f'style="background:#302b63;color:#fff;text-decoration:none;padding:14px 32px;'
-                   f'border-radius:10px;font-weight:bold;font-size:15px;display:inline-block;">'
-                   f'✅ Confirm your participation</a></div>')
         pixel = (f'<img src="{pixel_src}" width="1" height="1" style="display:none" alt="">'
                  if pixel_src else "")
         unsub = (
@@ -269,7 +276,12 @@ def build_message(org, recipient_emails, test_mode=False):
             except Exception:
                 pass
 
-    # PDF
+    # PDF (optionnel) — désactivable par campagne (attach_pdf=False ou ATTACH_PDF=0)
+    do_pdf = ATTACH_PDF if attach_pdf is None else bool(attach_pdf)
+    if org.get("attach_pdf") is not None:
+        do_pdf = bool(org.get("attach_pdf"))
+    if not do_pdf:
+        return msg, None
     pdf_name = f"LOGITERRE_2026_Invitation_{safe_filename(org['short'])}.pdf"
     pdf_path = PDF_DIR / pdf_name
     if not pdf_path.exists():
@@ -284,9 +296,9 @@ def build_message(org, recipient_emails, test_mode=False):
     return msg, pdf_path
 
 
-def send_one(org, recipients_to, max_retries=MAX_RETRIES, test_mode=False):
+def send_one(org, recipients_to, max_retries=MAX_RETRIES, test_mode=False, attach_pdf=None):
     """Open a fresh SMTP connection, send, close. Retry on transient errors."""
-    msg, pdf_path = build_message(org, recipients_to, test_mode=test_mode)
+    msg, pdf_path = build_message(org, recipients_to, test_mode=test_mode, attach_pdf=attach_pdf)
     all_rcpts = list(recipients_to) + list(CC_EMAILS)
 
     last_err = None

@@ -884,11 +884,13 @@ def send_background(targets, cfg, test_email=None):
     try:
         import send_emails as se
         se.SUBJECT   =cfg["subject"]
+        se.BODY      =cfg.get("body", se.BODY)          # corps édité dans le Composer (était ignoré avant)
         se.FROM_NAME =cfg["from_name"]
         se.FROM_EMAIL=cfg["from_email"]
         se.REPLY_TO  =cfg["reply_to"]
         se.CC_EMAILS =[x.strip() for x in cfg["cc"].split(",") if x.strip()]
         se.TRACK_BASE_URL = cfg.get("track_url","").rstrip("/")
+        se.ATTACH_PDF = bool(cfg.get("attach_pdf", False))   # joindre le PDF ? (par campagne)
     except Exception as e:
         write_live({"status":"stopped","total":0,"sent":0,"failed":0,"current":"",
                     "eta":0,"log":[{"ts":"--:--","status":"err","msg":f"❌ Module SMTP : {e}"}]})
@@ -995,12 +997,13 @@ def send_background(targets, cfg, test_email=None):
             live["log"].insert(0,{"ts":ts,"status":"dim","msg":f"⏭️ Déjà envoyé : {name[:35]}"})
             write_live(live); continue
 
-        # PDF
-        pdf,err=make_pdf(name,short)
-        if not pdf:
-            live["failed"]+=1
-            live["log"].insert(0,{"ts":ts,"status":"err","msg":f"❌ PDF : {name[:30]} — {err}"})
-            write_live(live); continue
+        # PDF (généré seulement si la campagne le demande)
+        if cfg.get("attach_pdf", False):
+            pdf,err=make_pdf(name,short)
+            if not pdf:
+                live["failed"]+=1
+                live["log"].insert(0,{"ts":ts,"status":"err","msg":f"❌ PDF : {name[:30]} — {err}"})
+                write_live(live); continue
 
         # Contact DB + tracking id
         track_id=None; contact_db_id=None
@@ -1024,7 +1027,7 @@ def send_background(targets, cfg, test_email=None):
                 org["body_override"]=tpl[1]
                 tpl_tag=f" [{otype}]"
 
-        ok_send,_,send_err=se.send_one(org,[email])
+        ok_send,_,send_err=se.send_one(org,[email],attach_pdf=cfg.get("attach_pdf",False))
 
         if ok_send:
             live["sent"]+=1
@@ -1076,7 +1079,7 @@ def send_background(targets, cfg, test_email=None):
 # ══ SESSION DEFAULTS ══════════════════════════════════════════
 if "cfg" not in st.session_state:
     st.session_state["cfg"]={
-        "subject":   "Official Invitation – LOGITERRE 2026 Plenary Session & International Transport and Logistics Forum & Exhibition.",
+        "subject":   "Exploring Participation Opportunities at LOGITERRE 2026.",
         "from_name": "LOGITERRE 2026 - Office of the Secretary General",
         "from_email":"a.zahraoui@logiterre-expo.com",
         "reply_to":  "sg@logiterre-expo.com",
@@ -1090,29 +1093,43 @@ if "cfg" not in st.session_state:
         "validate_before_send": True,
         "plan_limit": 1000,
         "daily_guard": True,
+        "attach_pdf": False,
         "body":"""Dear Sir / Madam,
 
 I hope this message finds you well.
 
-On behalf of the LOGITERRE 2026 Organizing Committee, it is my great honor to share with you the attached official invitation letter regarding the Third Edition of the International LOGITERRE Forum & Exhibition, scheduled to take place in Casablanca, Kingdom of Morocco, from 20 to 22 October 2026.
+I am reaching out regarding LOGITERRE 2026, the International Forum & Exhibition on Transport, Logistics, Smart Mobility and Sustainable Infrastructure, taking place in Casablanca, Morocco, from 20 to 22 October 2026.
 
-Organized under the High Patronage of His Majesty King Mohammed VI, LOGITERRE 2026 will convene high-level institutional leaders, policymakers, international organizations, academia, research centers, infrastructure experts, and major industry stakeholders to discuss the future of transport, logistics, smart mobility, sustainable infrastructure, and strategic connectivity ecosystems across Africa and the global economy.
+LOGITERRE 2026 will bring together public authorities, international organizations, infrastructure developers, logistics operators, technology providers, investors and industry leaders from across Africa and beyond.
 
-Considering the recognized expertise and international standing of your esteemed institution, we would be profoundly honored to welcome your participation and valuable contribution to this major international gathering.
+Having noted your company's presence within the sector and participation in major international exhibitions, I believe there may be valuable opportunities for your organization to connect with key stakeholders and explore new business partnerships through LOGITERRE 2026.
 
-Please find attached for your kind consideration:
-  - Official Invitation Letter  |  Brochure  |  Concept Note
-  - https://linktr.ee/LOGITERRE.PRO
+We would be pleased to discuss potential participation as an exhibitor, sponsor, speaker or institutional partner.
 
-With highest consideration and respect,
-Office of the Secretary General — LOGITERRE 2026
-sg@logiterre-expo.com  |  +212 673 642 4246"""}
+For more information about the event, please visit:
+
+https://linktr.ee/LOGITERRE
+
+Should you wish to receive the Exhibitor Brochure and Partnership Opportunities, simply reply to this email and our team will be delighted to assist you.
+
+Thank you for your time and consideration.
+
+I look forward to hearing from you.
+
+Kind regards,
+
+EZZAHRAOUI AYOUB
+International Relations & Development
+LOGITERRE 2026 Organizing Committee
+Casablanca, Kingdom of Morocco
+Email: sg@logiterre-expo.com
+Tel / WhatsApp: +212 673 642 4246."""}
 
 cfg=st.session_state["cfg"]
 # Migration : garantit la présence des nouvelles clés
 for _k,_v in [("track_url",""),("followup_enabled",False),("followup_days",7),
               ("auto_template",False),("scheduled_ts",None),("validate_before_send",True),
-              ("plan_limit",100),("daily_guard",True)]:
+              ("plan_limit",100),("daily_guard",True),("attach_pdf",False)]:
     cfg.setdefault(_k,_v)
 if "import_df" not in st.session_state: st.session_state["import_df"]=None
 if "send_list" not in st.session_state: st.session_state["send_list"]=[]
@@ -1390,6 +1407,10 @@ elif "✍️" in page:
         cfg["validate_before_send"]=st.toggle("🛡️ Valider chaque email avant envoi",
             value=cfg.get("validate_before_send",True),
             help="Vérifie format + domaine MX + Spamhaus avant chaque envoi (skip les invalides)")
+        cfg["attach_pdf"]=st.toggle("📎 Joindre l'invitation PDF",
+            value=cfg.get("attach_pdf",False),
+            help="Désactivé = email seul (plus léger, meilleure délivrabilité). Activé = génère + joint le PDF d'invitation.")
+        st.caption("📎 PDF joint" if cfg["attach_pdf"] else "✉️ Email sans pièce jointe")
         st.info(f"📊 Pour 10 emails : ~{10*cfg['delay']//60}min | Pour 50 : ~{50*cfg['delay']//60}min")
     with c2:
         st.markdown('<div class="section-title">📝 Corps du message</div>',unsafe_allow_html=True)
@@ -1632,16 +1653,19 @@ elif "🚀" in page:
                     try:
                         import send_emails as se
                         se.SUBJECT   = cfg["subject"]
+                        se.BODY      = cfg.get("body", se.BODY)
                         se.FROM_NAME = cfg["from_name"]; se.FROM_EMAIL = cfg["from_email"]
                         se.REPLY_TO  = cfg["reply_to"]
                         se.CC_EMAILS = []   # pas de CC sur un test
                         se.TRACK_BASE_URL = cfg.get("track_url","").rstrip("/")
+                        se.ATTACH_PDF = bool(cfg.get("attach_pdf", False))
                         if not se.SMTP_PASSWORD:
                             st.error("❌ Aucun mot de passe SMTP configuré (.streamlit/secrets.toml ou Secrets)")
                             st.stop()
                         short = safe_fn(test_name) or "test"
-                        pdf, perr = make_pdf(test_name, short)
-                        if not pdf:
+                        want_pdf = bool(cfg.get("attach_pdf", False))
+                        pdf, perr = (make_pdf(test_name, short) if want_pdf else (True, None))
+                        if want_pdf and not pdf:
                             st.error(f"❌ Échec génération PDF : {perr}")
                         else:
                             org = {"short":short,"name":test_name,"emails":[test_em]}
@@ -1651,7 +1675,8 @@ elif "🚀" in page:
                                     cid_t = db.get_default_campaign()
                                     org["track_id"] = db.ensure_contact(cid_t, test_name, test_em)
                                 except: pass
-                            ok, _, serr = se.send_one(org, [test_em], test_mode=True)
+                            ok, _, serr = se.send_one(org, [test_em], test_mode=True,
+                                                      attach_pdf=cfg.get("attach_pdf",False))
                             if ok:
                                 st.success(f"✅ Test envoyé à {test_em} ! Vérifie ta boîte (et les Promotions/Spam).")
                                 st.balloons()
