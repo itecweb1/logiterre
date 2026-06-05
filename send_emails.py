@@ -226,11 +226,11 @@ def build_message(org, recipient_emails, test_mode=False, attach_pdf=None):
     pure_body = body_text
     if unsub_link:
         body_text += ("\n\n--------------------------------------------------\n"
-                      "LOGITERRE 2026 — Forum-Salon International\n"
-                      "Mobilité · Transport · Logistique — Casablanca, 20-22 octobre 2026\n"
+                      "LOGITERRE 2026 — International Forum & Exhibition\n"
+                      "Transport · Logistics · Smart Mobility — Casablanca, 20-22 October 2026\n"
                       "sg@logiterre-expo.com · +212 673 642 4246\n\n"
-                      "Vous recevez cet email dans le cadre de l'invitation au salon LOGITERRE 2026.\n"
-                      f"Pour ne plus recevoir nos communications, désinscrivez-vous ici : {unsub_link}")
+                      "You received this email regarding participation in LOGITERRE 2026.\n"
+                      f"To stop receiving our communications, unsubscribe here: {unsub_link}")
 
     msg.set_content(body_text)
 
@@ -238,26 +238,30 @@ def build_message(org, recipient_emails, test_mode=False, attach_pdf=None):
     if True:
         html_body = pure_body.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         html_body = html_body.replace("\n", "<br>\n")
-        # Rend le lien linktr.ee cliquable ET traçable (via Edge Function click)
+        # Lien traçable avec texte DESCRIPTIF (pas l'URL brute) — évite le décalage
+        # texte/href que Outlook/SmartScreen interprète comme du phishing.
         html_body = html_body.replace(
             LINKTR_URL,
-            f'<a href="{link_target}" style="color:#302b63;font-weight:bold;text-decoration:none;">'
-            f'{LINKTR_URL}</a>')
+            f'<a href="{link_target}" style="color:#1a5fb4;font-weight:bold;text-decoration:underline;">'
+            f'LOGITERRE 2026 — Official Event Page</a>')
         cta = ""
-        pixel = (f'<img src="{pixel_src}" width="1" height="1" style="display:none" alt="">'
+        # Pixel d'ouverture : 1x1 transparent SANS display:none (le contenu caché
+        # est un signal anti-spam ; un 1x1 transparent l'est beaucoup moins).
+        pixel = (f'<img src="{pixel_src}" width="1" height="1" border="0" alt="" '
+                 f'style="width:1px;height:1px;opacity:0;overflow:hidden;">'
                  if pixel_src else "")
         unsub = (
             f'<div style="margin-top:34px;padding-top:18px;border-top:1px solid #e6e6e6;'
             f'text-align:center;font-size:12px;color:#9a9a9a;line-height:1.7;">'
-            f'<div style="font-weight:bold;color:#6b6b6b;">LOGITERRE 2026 — Forum-Salon International</div>'
-            f'Mobilité · Transport · Logistique — Casablanca, 20–22 octobre 2026<br>'
+            f'<div style="font-weight:bold;color:#6b6b6b;">LOGITERRE 2026 — International Forum &amp; Exhibition</div>'
+            f'Transport · Logistics · Smart Mobility — Casablanca, 20–22 October 2026<br>'
             f'<a href="mailto:sg@logiterre-expo.com" style="color:#9a9a9a;text-decoration:none;">sg@logiterre-expo.com</a>'
             f' · +212 673 642 4246<br><br>'
-            f'<span style="color:#b0b0b0;">Vous recevez cet email dans le cadre de l\'invitation au salon '
+            f'<span style="color:#b0b0b0;">You received this email regarding participation in '
             f'LOGITERRE 2026.</span><br>'
-            f'Si vous ne souhaitez plus recevoir nos communications, '
+            f'If you no longer wish to receive our communications, '
             f'<a href="{unsub_link}" style="color:#777;text-decoration:underline;font-weight:bold;">'
-            f'désinscrivez-vous ici</a>.'
+            f'unsubscribe here</a>.'
             f'</div>') if unsub_link else ""
         # Logo LogiTerre en en-tête (image inline CID — fiable dans la plupart des clients)
         logo_path = _Path(__file__).resolve().parent / "logo.png"

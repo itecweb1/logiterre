@@ -53,8 +53,10 @@ def check_dmarc(domain):
     return {"status": "ok", "record": rec, "msg": f"DMARC présent — politique {quality}"}
 
 # Sélecteurs DKIM courants (Hostinger + génériques)
-DKIM_SELECTORS = ["hostingermail", "default", "dkim", "mail", "google", "selector1",
-                  "selector2", "k1", "s1", "s2", "smtp", "hs1", "hs2"]
+# NB : Hostinger utilise hostingermail-a/-b/-c (CNAME → *.dkim.mail.hostinger.com)
+DKIM_SELECTORS = ["hostingermail-a", "hostingermail-b", "hostingermail-c",
+                  "hostingermail", "default", "dkim", "mail", "google", "selector1",
+                  "selector2", "k1", "s1", "s2", "smtp", "hs1", "hs2", "brevo"]
 
 def check_dkim(domain, selectors=None):
     """DKIM : signature cryptographique. On teste les sélecteurs courants."""
