@@ -1094,7 +1094,7 @@ if "cfg" not in st.session_state:
         "plan_limit": 1000,
         "daily_guard": True,
         "attach_pdf": False,
-        "body":"""Dear Sir / Madam,
+        "body":"""Dear {name},
 
 I hope this message finds you well.
 
@@ -1414,7 +1414,9 @@ elif "✍️" in page:
         st.info(f"📊 Pour 10 emails : ~{10*cfg['delay']//60}min | Pour 50 : ~{50*cfg['delay']//60}min")
     with c2:
         st.markdown('<div class="section-title">📝 Corps du message</div>',unsafe_allow_html=True)
-        cfg["body"]=st.text_area("",value=cfg["body"],height=380,label_visibility="collapsed")
+        cfg["body"]=st.text_area("",value=cfg["body"],height=360,label_visibility="collapsed")
+        st.caption("💡 Variables auto : **{name}** (nom/orga · évite le spam « Dear Sir/Madam »), "
+                   "**{first_name}**, **{org}**, **{email}** — remplacées pour chaque destinataire.")
 
     st.markdown("---")
     # ── Tracking + Relances ───────────────────────────────────

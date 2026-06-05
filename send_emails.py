@@ -112,7 +112,7 @@ LINKTR_URL = "https://linktr.ee/LOGITERRE"
 # Joindre le PDF d'invitation ? (désactivable par campagne via cfg/env ATTACH_PDF=0)
 ATTACH_PDF = _os.environ.get("ATTACH_PDF", "1").strip().lower() not in ("0", "false", "no", "")
 
-BODY = """Dear Sir / Madam,
+BODY = """Dear {name},
 
 I hope this message finds you well.
 
@@ -178,13 +178,6 @@ def build_message(org, recipient_emails, test_mode=False, attach_pdf=None):
     msg["X-Mailer"]     = "LOGITERRE 2026 Secretariat"
     msg["X-Priority"]   = "3"  # Normal
 
-    # Subject / body : override par-destinataire (auto-template) si fourni
-    subject = org.get("subject_override") or SUBJECT
-    if test_mode:
-        subject = "[TEST] " + subject
-    msg["Subject"] = subject
-
-    body_text = org.get("body_override") or BODY
     track_id  = org.get("track_id")
     track_url = globals().get("TRACK_BASE_URL", "")
     app_url   = _os.environ.get("APP_URL", "").rstrip("/")        # URL app cloud (RSVP)
@@ -192,6 +185,23 @@ def build_message(org, recipient_emails, test_mode=False, attach_pdf=None):
     org_name  = org.get("name", "")
     to_email  = (recipient_emails[0] if recipient_emails else "")
     import urllib.parse as _up
+
+    # Personnalisation (mail-merge) : {name} {first_name} {org} {email}
+    # Personnaliser la salutation supprime aussi la règle SpamAssassin DEAR_SOMETHING
+    # (+1.7 pt) déclenchée par « Dear Sir / Madam » — gros gain de délivrabilité.
+    _nm = (org_name or "").strip() or "Colleague"
+    _first = _nm.split()[0] if _nm.split() else _nm
+    def _merge(t):
+        if not t: return t
+        return (t.replace("{name}", _nm).replace("{first_name}", _first)
+                 .replace("{org}", _nm).replace("{email}", to_email))
+
+    # Subject / body : override par-destinataire (auto-template) si fourni, puis personnalisé
+    subject = _merge(org.get("subject_override") or SUBJECT)
+    if test_mode:
+        subject = "[TEST] " + subject
+    msg["Subject"] = subject
+    body_text = _merge(org.get("body_override") or BODY)
 
     # Désinscription : app cloud (?unsub=email) si dispo, sinon serveur tracking
     if app_url and to_email:
