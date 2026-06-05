@@ -198,6 +198,12 @@ def build_message(org, recipient_emails, test_mode=False):
     else:
         unsub_link = None
 
+    # En-tête List-Unsubscribe : Gmail/Outlook affichent un bouton natif « Se désabonner »
+    # (fort signal anti-spam + désinscription en 1 clic, conforme RGPD/RFC 8058)
+    if unsub_link:
+        msg["List-Unsubscribe"] = f"<{unsub_link}>"
+        msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
+
     # Pixel d'ouverture : priorité à la fonction Supabase Edge (100% cloud, sans Mac)
     pixel_src = None
     if supa_url and to_email:
@@ -210,7 +216,12 @@ def build_message(org, recipient_emails, test_mode=False):
     if rsvp_link:
         body_text += f"\n\n👉 Confirm your participation : {rsvp_link}"
     if unsub_link:
-        body_text += f"\n\n---\nUnsubscribe : {unsub_link}"
+        body_text += ("\n\n--------------------------------------------------\n"
+                      "LOGITERRE 2026 — Forum-Salon International\n"
+                      "Mobilité · Transport · Logistique — Casablanca, 20-22 octobre 2026\n"
+                      "sg@logiterre-expo.com · +212 673 642 4246\n\n"
+                      "Vous recevez cet email dans le cadre de l'invitation au salon LOGITERRE 2026.\n"
+                      f"Pour ne plus recevoir nos communications, désinscrivez-vous ici : {unsub_link}")
 
     msg.set_content(body_text)
 
@@ -228,8 +239,19 @@ def build_message(org, recipient_emails, test_mode=False):
                    f'✅ Confirm your participation</a></div>')
         pixel = (f'<img src="{pixel_src}" width="1" height="1" style="display:none" alt="">'
                  if pixel_src else "")
-        unsub = (f'<br><br><span style="font-size:11px;color:#999;">'
-                 f'Pour vous désinscrire : <a href="{unsub_link}">cliquez ici</a></span>') if unsub_link else ""
+        unsub = (
+            f'<div style="margin-top:34px;padding-top:18px;border-top:1px solid #e6e6e6;'
+            f'text-align:center;font-size:12px;color:#9a9a9a;line-height:1.7;">'
+            f'<div style="font-weight:bold;color:#6b6b6b;">LOGITERRE 2026 — Forum-Salon International</div>'
+            f'Mobilité · Transport · Logistique — Casablanca, 20–22 octobre 2026<br>'
+            f'<a href="mailto:sg@logiterre-expo.com" style="color:#9a9a9a;text-decoration:none;">sg@logiterre-expo.com</a>'
+            f' · +212 673 642 4246<br><br>'
+            f'<span style="color:#b0b0b0;">Vous recevez cet email dans le cadre de l\'invitation au salon '
+            f'LOGITERRE 2026.</span><br>'
+            f'Si vous ne souhaitez plus recevoir nos communications, '
+            f'<a href="{unsub_link}" style="color:#777;text-decoration:underline;font-weight:bold;">'
+            f'désinscrivez-vous ici</a>.'
+            f'</div>') if unsub_link else ""
         # Logo LogiTerre en en-tête (image inline CID — fiable dans la plupart des clients)
         logo_path = _Path(__file__).resolve().parent / "logo.png"
         logo_header = ""
