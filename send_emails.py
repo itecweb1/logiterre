@@ -320,9 +320,17 @@ def send_one(org, recipients_to, max_retries=MAX_RETRIES, test_mode=False, attac
     for attempt in range(1, max_retries + 1):
         try:
             ctx = ssl._create_unverified_context()
-            with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=ctx, timeout=60) as smtp:
-                smtp.login(SMTP_USER, SMTP_PASSWORD)
-                smtp.send_message(msg, from_addr=FROM_EMAIL, to_addrs=all_rcpts)
+            if int(SMTP_PORT) == 587:
+                # STARTTLS (la plupart des ESP : SendGrid, Brevo, Amazon SES, Mailgun…)
+                with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=60) as smtp:
+                    smtp.ehlo(); smtp.starttls(context=ctx); smtp.ehlo()
+                    smtp.login(SMTP_USER, SMTP_PASSWORD)
+                    smtp.send_message(msg, from_addr=FROM_EMAIL, to_addrs=all_rcpts)
+            else:
+                # SSL direct (Hostinger : port 465)
+                with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=ctx, timeout=60) as smtp:
+                    smtp.login(SMTP_USER, SMTP_PASSWORD)
+                    smtp.send_message(msg, from_addr=FROM_EMAIL, to_addrs=all_rcpts)
             return True, pdf_path, None
         except (smtplib.SMTPServerDisconnected,
                 smtplib.SMTPConnectError,

@@ -147,3 +147,67 @@ def get_unsubs():
         return select("unsubscribes", "select=*&order=added_at.desc")
     except Exception:
         return []
+
+# ── Liste de suppression (bounces / plaintes / blocage manuel) ──
+def add_suppression(email, reason="manual", note=""):
+    """Ajoute une adresse à ne plus jamais contacter (upsert)."""
+    try:
+        url, _ = _cfg()
+        r = requests.post(f"{url}/rest/v1/suppressions",
+                          json={"email": email.lower().strip(), "reason": reason, "note": note},
+                          headers=_headers({"Prefer": "resolution=merge-duplicates"}), timeout=12)
+        r.raise_for_status()
+        return True
+    except Exception:
+        return None
+
+def get_suppressions():
+    try:
+        return select("suppressions", "select=*&order=created.desc")
+    except Exception:
+        return []
+
+def is_suppressed(email):
+    try:
+        rows = select("suppressions", f"select=email&email=eq.{email.lower().strip()}")
+        return len(rows) > 0
+    except Exception:
+        return False
+
+def remove_suppression(email):
+    try:
+        url, _ = _cfg()
+        r = requests.delete(f"{url}/rest/v1/suppressions?email=eq.{email.lower().strip()}",
+                            headers=_headers(), timeout=12)
+        r.raise_for_status()
+        return True
+    except Exception:
+        return None
+
+def suppressed_set():
+    """Set de toutes les adresses supprimées (bounces+plaintes+manuel) pour dédup rapide."""
+    try:
+        rows = select("suppressions", "select=email")
+        return {r["email"].lower().strip() for r in rows if r.get("email")}
+    except Exception:
+        return set()
+
+# ── Warmup (montée en charge progressive) ──────────────────────
+def get_warmup():
+    try:
+        rows = select("warmup_state", "select=*&id=eq.1")
+        return rows[0] if rows else None
+    except Exception:
+        return None
+
+def set_warmup(start_date, day0_limit=20, active=True):
+    try:
+        url, _ = _cfg()
+        r = requests.post(f"{url}/rest/v1/warmup_state",
+                          json={"id": 1, "start_date": start_date,
+                                "day0_limit": int(day0_limit), "active": bool(active)},
+                          headers=_headers({"Prefer": "resolution=merge-duplicates"}), timeout=12)
+        r.raise_for_status()
+        return True
+    except Exception:
+        return None

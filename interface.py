@@ -879,6 +879,24 @@ def save_list(name, rows):
 def load_saved_lists():
     return sorted(LISTS_DIR.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True)
 
+# ── Warmup : limite d'envoi du jour selon la montée en charge ──
+def warmup_today_limit():
+    """Limite d'envois pour aujourd'hui selon le warmup (Supabase). None si inactif."""
+    if not supa.enabled(): return None
+    try:
+        w = supa.get_warmup()
+    except Exception:
+        return None
+    if not w or not w.get("active") or not w.get("start_date"): return None
+    import datetime as _dt
+    try:
+        start = _dt.date.fromisoformat(str(w["start_date"])[:10])
+    except Exception:
+        return None
+    days = max(0, (_dt.date.today() - start).days)
+    base = int(w.get("day0_limit", 20) or 20)
+    return max(1, round(base * (1.5 ** days)))
+
 # ══ BACKGROUND SENDER ════════════════════════════════════════
 def send_background(targets, cfg, test_email=None):
     try:
@@ -891,6 +909,14 @@ def send_background(targets, cfg, test_email=None):
         se.CC_EMAILS =[x.strip() for x in cfg["cc"].split(",") if x.strip()]
         se.TRACK_BASE_URL = cfg.get("track_url","").rstrip("/")
         se.ATTACH_PDF = bool(cfg.get("attach_pdf", False))   # joindre le PDF ? (par campagne)
+        # Serveur SMTP configurable (par défaut Hostinger) — permet un ESP dédié
+        if cfg.get("smtp_server"):   se.SMTP_SERVER = cfg["smtp_server"].strip()
+        if cfg.get("smtp_port"):
+            try: se.SMTP_PORT = int(cfg["smtp_port"])
+            except Exception: pass
+        if cfg.get("smtp_user"):     se.SMTP_USER = se.FROM_EMAIL = cfg["smtp_user"].strip()
+        if cfg.get("smtp_from"):     se.FROM_EMAIL = cfg["smtp_from"].strip()
+        if cfg.get("smtp_password"): se.SMTP_PASSWORD = cfg["smtp_password"]
     except Exception as e:
         write_live({"status":"stopped","total":0,"sent":0,"failed":0,"current":"",
                     "eta":0,"log":[{"ts":"--:--","status":"err","msg":f"❌ Module SMTP : {e}"}]})
@@ -907,6 +933,9 @@ def send_background(targets, cfg, test_email=None):
         try:
             camp_id = cfg.get("campaign_id") or db.get_default_campaign()
         except: camp_id = None
+
+    # Liste de suppression (bounces/plaintes/manuel) — précalculée une fois
+    _suppressed = supa.suppressed_set() if supa.enabled() else set()
 
     live={"status":"running","total":len(targets),"sent":0,"failed":0,"skipped":0,
           "current":"","eta":len(targets)*cfg["delay"],"log":[],"start":time.time()}
@@ -956,6 +985,8 @@ def send_background(targets, cfg, test_email=None):
             cc_n=len([x for x in cfg.get("cc","").split(",") if x.strip()])
             per_send=1+cc_n                       # 1 destinataire + N CC = N+1 messages
             limit=cfg.get("plan_limit",100)
+            _wl=warmup_today_limit()              # warmup : plafond progressif du jour
+            if _wl is not None: limit=min(limit,_wl)
             if messages_today()+per_send > limit:
                 live["status"]="stopped"
                 live["log"].insert(0,{"ts":ts,"status":"err",
@@ -990,6 +1021,12 @@ def send_background(targets, cfg, test_email=None):
                     live["log"].insert(0,{"ts":ts,"status":"info","msg":f"🚫 Désinscrit : {name[:35]}"})
                     write_live(live); continue
             except: pass
+
+        # Skip if on suppression list (bounces / plaintes / blocage manuel)
+        if not test_email and email.lower() in _suppressed:
+            live["skipped"]=live.get("skipped",0)+1
+            live["log"].insert(0,{"ts":ts,"status":"info","msg":f"🛡️ Supprimé (bounce/blocage) : {name[:30]}"})
+            write_live(live); continue
 
         # Skip if already sent (not in test mode) — compté comme "ignoré"
         if not test_email and email.lower() in already_sent_emails():
@@ -1129,7 +1166,9 @@ cfg=st.session_state["cfg"]
 # Migration : garantit la présence des nouvelles clés
 for _k,_v in [("track_url",""),("followup_enabled",False),("followup_days",7),
               ("auto_template",False),("scheduled_ts",None),("validate_before_send",True),
-              ("plan_limit",100),("daily_guard",True),("attach_pdf",False)]:
+              ("plan_limit",100),("daily_guard",True),("attach_pdf",False),
+              ("smtp_server","smtp.hostinger.com"),("smtp_port",465),("smtp_user",""),
+              ("smtp_password",""),("smtp_from","")]:
     cfg.setdefault(_k,_v)
 if "import_df" not in st.session_state: st.session_state["import_df"]=None
 if "send_list" not in st.session_state: st.session_state["send_list"]=[]
@@ -1169,6 +1208,7 @@ with st.sidebar:
         "✍️  Composer",
         "📝  Templates",
         "🛡️  Validation",
+        "📡  Délivrabilité",
         "🚀  Envoyer",
         "🔄  Relances",
         "👁️  Watch Live",
@@ -1658,6 +1698,14 @@ elif "🚀" in page:
                         se.BODY      = cfg.get("body", se.BODY)
                         se.FROM_NAME = cfg["from_name"]; se.FROM_EMAIL = cfg["from_email"]
                         se.REPLY_TO  = cfg["reply_to"]
+                        # SMTP configurable (même réglage que l'envoi réel)
+                        if cfg.get("smtp_server"):   se.SMTP_SERVER = cfg["smtp_server"].strip()
+                        if cfg.get("smtp_port"):
+                            try: se.SMTP_PORT = int(cfg["smtp_port"])
+                            except Exception: pass
+                        if cfg.get("smtp_user"):     se.SMTP_USER = se.FROM_EMAIL = cfg["smtp_user"].strip()
+                        if cfg.get("smtp_from"):     se.FROM_EMAIL = cfg["smtp_from"].strip()
+                        if cfg.get("smtp_password"): se.SMTP_PASSWORD = cfg["smtp_password"]
                         se.CC_EMAILS = []   # pas de CC sur un test
                         se.TRACK_BASE_URL = cfg.get("track_url","").rstrip("/")
                         se.ATTACH_PDF = bool(cfg.get("attach_pdf", False))
@@ -2371,6 +2419,158 @@ elif "✅" in page:
             pd.DataFrame(confirmed)[["org_name","email","delegates","speaker","notes"]].to_csv(buf,index=False)
             st.download_button("⬇️ Exporter les confirmés (CSV)",data=buf.getvalue().encode("utf-8-sig"),
                 file_name="confirmes_logiterre.csv",mime="text/csv",use_container_width=True)
+
+# ════ 📡 DÉLIVRABILITÉ (SMTP · warmup · suppression · bounces) ════
+elif "📡" in page:
+    page_header("Réputation", "Délivrabilité",
+                "Serveur d'envoi · montée en charge (warmup) · liste de suppression · bounces")
+    import datetime as _dt
+
+    tab_smtp, tab_warm, tab_supp, tab_bounce = st.tabs(
+        ["📤 Serveur SMTP", "🔥 Warmup", "🛡️ Suppression", "🔴 Scan bounces"])
+
+    # ── 1) SMTP configurable ──────────────────────────────────
+    with tab_smtp:
+        st.caption("Par défaut : Hostinger. Pour booster la délivrabilité tu peux brancher un "
+                   "ESP dédié (Brevo, SendGrid, Amazon SES, Mailgun…) — IP à meilleure réputation.")
+        PRESETS={"Hostinger (défaut)":("smtp.hostinger.com",465),
+                 "Brevo (Sendinblue)":("smtp-relay.brevo.com",587),
+                 "SendGrid":("smtp.sendgrid.net",587),
+                 "Amazon SES (eu-west-1)":("email-smtp.eu-west-1.amazonaws.com",587),
+                 "Mailgun":("smtp.mailgun.org",587),
+                 "Gmail / Google Workspace":("smtp.gmail.com",587)}
+        pc1,pc2=st.columns([2,1])
+        with pc1:
+            preset=st.selectbox("Préréglage fournisseur",list(PRESETS.keys()))
+        with pc2:
+            if st.button("Appliquer le préréglage",use_container_width=True):
+                cfg["smtp_server"],cfg["smtp_port"]=PRESETS[preset]; st.rerun()
+        s1,s2=st.columns(2)
+        with s1:
+            cfg["smtp_server"]=st.text_input("Serveur SMTP",value=cfg.get("smtp_server","smtp.hostinger.com"))
+            cfg["smtp_user"]=st.text_input("Identifiant SMTP",value=cfg.get("smtp_user",""),
+                placeholder="(vide = compte Hostinger par défaut)")
+            cfg["smtp_from"]=st.text_input("Adresse expéditeur (From)",value=cfg.get("smtp_from",""),
+                placeholder="(vide = identifiant SMTP)")
+        with s2:
+            cfg["smtp_port"]=st.number_input("Port",value=int(cfg.get("smtp_port",465)),step=1,
+                help="465 = SSL (Hostinger) · 587 = STARTTLS (la plupart des ESP)")
+            cfg["smtp_password"]=st.text_input("Mot de passe / clé SMTP",value=cfg.get("smtp_password",""),
+                type="password",placeholder="(vide = secret Hostinger configuré)")
+        prov = "STARTTLS" if int(cfg.get("smtp_port",465))==587 else "SSL"
+        st.info(f"📤 Envoi via **{cfg.get('smtp_server')}**:{int(cfg.get('smtp_port',465))} ({prov}) · "
+                f"{'identifiant personnalisé' if cfg.get('smtp_user') else 'compte Hostinger par défaut'}")
+        st.caption("💡 Astuce : un ESP dédié (SES/Brevo) sur ton domaine authentifié = la plus grosse "
+                   "amélioration possible de délivrabilité (IP réputée + volume élevé).")
+
+    # ── 2) Warmup ─────────────────────────────────────────────
+    with tab_warm:
+        st.caption("Le warmup protège ta réputation : on commence petit et on augmente le volume "
+                   "autorisé chaque jour (×1,5/jour). Indispensable pour un domaine jeune (Outlook).")
+        if not supa.enabled():
+            st.warning("Le warmup persistant nécessite Supabase configuré (Secrets).")
+        else:
+            w=supa.get_warmup() or {}
+            wc1,wc2,wc3=st.columns(3)
+            with wc1:
+                active=st.toggle("🔥 Warmup activé",value=bool(w.get("active",False)))
+            with wc2:
+                d0=st.number_input("Volume jour 1",min_value=5,max_value=500,
+                    value=int(w.get("day0_limit",20) or 20),step=5)
+            with wc3:
+                sd_default=_dt.date.fromisoformat(str(w["start_date"])[:10]) if w.get("start_date") else _dt.date.today()
+                start=st.date_input("Date de début",value=sd_default)
+            if st.button("💾 Enregistrer le warmup",type="primary"):
+                supa.set_warmup(start.isoformat(),d0,active); st.success("Warmup enregistré ✅"); st.rerun()
+            # Aperçu de la montée en charge
+            if w.get("active") and w.get("start_date"):
+                tl=warmup_today_limit()
+                st.markdown(f"""<div style="background:linear-gradient(135deg,#d2691e14,#d2691e05);
+                  border:1px solid #d2691e33;border-radius:12px;padding:1rem;margin-top:.6rem;">
+                  <div style="font-size:.7rem;opacity:.6;text-transform:uppercase;">Limite autorisée aujourd'hui</div>
+                  <div style="font-size:2rem;font-weight:800;color:#d2691e;">{tl} emails</div>
+                  <div style="font-size:.75rem;opacity:.7;">déjà envoyés aujourd'hui : {messages_today()} · plafond plan : {cfg.get('plan_limit',1000)}</div>
+                  </div>""",unsafe_allow_html=True)
+                # planning 10 jours
+                base=int(w.get("day0_limit",20) or 20)
+                sched=[{"Jour":f"J+{n}","Date":(_dt.date.fromisoformat(str(w['start_date'])[:10])+_dt.timedelta(days=n)).isoformat(),
+                        "Limite/jour":min(cfg.get('plan_limit',1000),round(base*(1.5**n)))} for n in range(0,11)]
+                st.dataframe(pd.DataFrame(sched),use_container_width=True,hide_index=True,height=240)
+            else:
+                st.info("Active le warmup et enregistre pour voir le planning de montée en charge.")
+
+    # ── 3) Liste de suppression ───────────────────────────────
+    with tab_supp:
+        st.caption("Adresses à ne JAMAIS recontacter (bounces, plaintes, blocage manuel). "
+                   "Elles sont automatiquement ignorées à l'envoi — protège ta réputation.")
+        if not supa.enabled():
+            st.warning("La liste de suppression persistante nécessite Supabase (Secrets).")
+        else:
+            ac1,ac2=st.columns([3,1])
+            with ac1:
+                new_supp=st.text_input("Ajouter une adresse à supprimer",placeholder="email@exemple.com")
+            with ac2:
+                st.markdown("<div style='height:1.8rem'></div>",unsafe_allow_html=True)
+                if st.button("➕ Supprimer",use_container_width=True) and new_supp.strip():
+                    supa.add_suppression(new_supp.strip(),"manual"); st.rerun()
+            sup=supa.get_suppressions()
+            uns=supa.get_unsubs()
+            m1,m2=st.columns(2)
+            m1.metric("🛡️ Supprimées (bounce/manuel)",len(sup))
+            m2.metric("🚫 Désinscrites (RGPD)",len(uns))
+            if sup:
+                df=pd.DataFrame([{"Email":s.get("email",""),"Raison":s.get("reason","manual"),
+                    "Note":s.get("note",""),"Date":(s.get("created","") or "")[:16]} for s in sup])
+                st.dataframe(df,use_container_width=True,hide_index=True,height=300)
+                cbuf=io.StringIO(); df.to_csv(cbuf,index=False)
+                st.download_button("⬇️ Exporter (CSV)",cbuf.getvalue().encode("utf-8-sig"),
+                    "suppression_logiterre.csv","text/csv")
+                rm=st.text_input("Réhabiliter une adresse (retirer de la liste)",placeholder="email@exemple.com")
+                if st.button("♻️ Retirer de la suppression") and rm.strip():
+                    supa.remove_suppression(rm.strip()); st.success(f"{rm} réhabilitée"); st.rerun()
+            else:
+                st.success("Aucune adresse supprimée. 👍")
+
+    # ── 4) Scan des bounces (IMAP) ────────────────────────────
+    with tab_bounce:
+        st.caption("Scanne ta boîte IMAP, détecte les emails de bounce (échec de livraison) et "
+                   "ajoute automatiquement les adresses mortes à la liste de suppression.")
+        if not IMAP_PASSWORD:
+            st.warning("Configure IMAP (mot de passe) pour scanner les bounces.")
+        else:
+            scan_n=st.slider("Nombre d'emails récents à scanner",20,300,100,20)
+            if st.button("🔍 Scanner les bounces maintenant",type="primary"):
+                with st.spinner("Connexion IMAP + analyse…"):
+                    try:
+                        mail=imap_connect()
+                        items,err=fetch_folder_emails(mail,"INBOX",limit=scan_n,search="ALL")
+                        try: mail.logout()
+                        except Exception: pass
+                        if err:
+                            st.error(f"Erreur IMAP : {err}")
+                        else:
+                            own={"logiterre-expo.com","uaotlafrica.com"}
+                            found=set()
+                            email_re=re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
+                            for it in items:
+                                if not it.get("bounce"): continue
+                                for cand in email_re.findall(it.get("body","")+" "+it.get("subject","")):
+                                    cl=cand.lower().strip(".,;:<>()[]")
+                                    if cl.split("@")[-1] in own: continue
+                                    if "mailer-daemon" in cl or "postmaster" in cl: continue
+                                    found.add(cl)
+                            added=0
+                            if supa.enabled():
+                                for e in found:
+                                    if supa.add_suppression(e,"bounce","détecté via scan IMAP"): added+=1
+                            n_bounce=sum(1 for it in items if it.get("bounce"))
+                            st.success(f"✅ Scan terminé : {n_bounce} bounce(s) trouvé(s) · "
+                                       f"{len(found)} adresse(s) extraite(s) · {added} ajoutée(s) à la suppression.")
+                            if found:
+                                st.dataframe(pd.DataFrame(sorted(found),columns=["Adresse en bounce (supprimée)"]),
+                                    use_container_width=True,hide_index=True,height=240)
+                    except Exception as e:
+                        st.error(f"❌ {type(e).__name__}: {e}")
 
 # ════ 🎯 ENGAGEMENT (tracking ouvreurs / cliqueurs / désinscrits) ══
 elif "🎯" in page:
