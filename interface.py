@@ -870,7 +870,7 @@ def make_pdf(name, short):
     except Exception as e:
         return None, str(e)
 
-# ── Save/Load contact lists ───────────────────────────────────
+# ── Save/Load contact lists (local) ───────────────────────────
 def save_list(name, rows):
     p=LISTS_DIR/f"{safe_fn(name)}.json"
     p.write_text(json.dumps({"name":name,"rows":rows,"saved":time.strftime("%Y-%m-%d %H:%M")},
@@ -878,6 +878,46 @@ def save_list(name, rows):
 
 def load_saved_lists():
     return sorted(LISTS_DIR.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True)
+
+# ── Stockage unifié des listes : Supabase (persistant cloud) sinon local ──
+def list_store_save(name, rows):
+    """Sauvegarde une liste par nom. Supabase si dispo (survit aux redéploiements)."""
+    name=(name or "").strip()
+    if not name: return False
+    rows=[dict(r) for r in rows]
+    if supa.enabled():
+        try: supa.save_list(name, rows); return True
+        except Exception: pass
+    save_list(name, rows)   # repli local
+    return True
+
+def list_store_load():
+    """Retourne [{name, rows, saved}] depuis Supabase si dispo, sinon disque local."""
+    if supa.enabled():
+        try:
+            out=[]
+            for r in supa.get_lists():
+                out.append({"name": r.get("name",""), "rows": r.get("rows") or [],
+                            "saved": (r.get("saved") or (r.get("created","") or "")[:16])})
+            return out
+        except Exception: pass
+    out=[]
+    for p in load_saved_lists():
+        try: d=json.loads(p.read_text())
+        except Exception: continue
+        out.append({"name": d.get("name",p.stem), "rows": d.get("rows",[]),
+                    "saved": d.get("saved","")})
+    return out
+
+def list_store_delete(name):
+    """Supprime une liste par nom (Supabase + local pour être sûr)."""
+    if supa.enabled():
+        try: supa.delete_list(name)
+        except Exception: pass
+    p=LISTS_DIR/f"{safe_fn(name)}.json"
+    if p.exists():
+        try: p.unlink()
+        except Exception: pass
 
 # ── Warmup : limite d'envoi du jour selon la montée en charge ──
 def warmup_today_limit():
@@ -1333,16 +1373,30 @@ elif "📤" in page:
         up=st.file_uploader("📂 Glisse ton fichier",type=["xlsx","xls","csv","docx"],
             help="Formats : Excel, CSV, Word")
         if up:
-            with st.spinner("🔍 Extraction..."):
-                fb=up.read(); ext=Path(up.name).suffix.lower()
-                try:
-                    if ext in (".xlsx",".xls"): results=extract_from_xlsx(fb)
-                    elif ext==".csv": results=extract_from_csv(fb)
-                    else: results=extract_from_docx(fb)
-                    st.session_state["import_df"]=pd.DataFrame(results)
-                    st.success(f"✅ {len(results)} organisation(s) extraite(s) depuis **{up.name}**")
-                except Exception as e:
-                    st.error(f"❌ Erreur extraction : {e}")
+            sig=f"{up.name}:{up.size}"
+            if st.session_state.get("_last_upload_sig")!=sig:
+                st.session_state["_last_upload_sig"]=sig
+                with st.spinner("🔍 Extraction..."):
+                    fb=up.read(); ext=Path(up.name).suffix.lower()
+                    try:
+                        if ext in (".xlsx",".xls"): results=extract_from_xlsx(fb)
+                        elif ext==".csv": results=extract_from_csv(fb)
+                        else: results=extract_from_docx(fb)
+                        st.session_state["import_df"]=pd.DataFrame(results)
+                        srcname=Path(up.name).stem
+                        st.session_state["import_src_name"]=srcname
+                        # 💾 Sauvegarde AUTOMATIQUE persistante, sous le nom du fichier
+                        saved_ok=False
+                        try: saved_ok=list_store_save(srcname, results)
+                        except Exception: saved_ok=False
+                        where="☁️ cloud" if supa.enabled() else "local"
+                        if saved_ok:
+                            st.success(f"✅ {len(results)} organisation(s) extraite(s) depuis **{up.name}** — "
+                                       f"💾 sauvegardé sous «{srcname}» ({where}), retrouvable dans 📋 Listes")
+                        else:
+                            st.success(f"✅ {len(results)} organisation(s) extraite(s) depuis **{up.name}**")
+                    except Exception as e:
+                        st.error(f"❌ Erreur extraction : {e}")
 
     with tab_text:
         st.markdown("Colle des emails ou une liste (1 par ligne, ou format `Nom — email`) :")
@@ -1357,23 +1411,23 @@ elif "📤" in page:
                 st.warning("Aucun email valide trouvé.")
 
     with tab_saved:
-        saved=load_saved_lists()
+        saved=list_store_load()
         if saved:
-            for p in saved:
-                try: d=json.loads(p.read_text())
-                except: continue
-                dname=d.get("name",p.stem); drows=d.get("rows",[]); dsaved=d.get("saved","")
+            if supa.enabled(): st.caption("☁️ Listes persistantes (Supabase) — conservées même après redéploiement.")
+            for i,d in enumerate(saved):
+                dname=d["name"]; drows=d["rows"]; dsaved=d.get("saved","")
+                k=safe_fn(dname) or f"l{i}"
                 c_n,c_l,c_d=st.columns([3,1,1])
                 with c_n: st.markdown(f"**{dname}** — {len(drows)} contacts — *{dsaved}*")
                 with c_l:
-                    if st.button("📂 Charger",key=f"load_{p.stem}",use_container_width=True):
+                    if st.button("📂 Charger",key=f"load_{k}_{i}",use_container_width=True):
                         st.session_state["import_df"]=pd.DataFrame(drows)
                         st.success(f"✅ Liste «{dname}» chargée")
                 with c_d:
-                    if st.button("🗑️ Suppr.",key=f"del_{p.stem}",use_container_width=True):
-                        p.unlink(); st.rerun()
+                    if st.button("🗑️ Suppr.",key=f"del_{k}_{i}",use_container_width=True):
+                        list_store_delete(dname); st.rerun()
         else:
-            st.info("Aucune liste sauvegardée. Importe un fichier et sauvegarde-la.")
+            st.info("Aucune liste sauvegardée. Importe un fichier — il sera sauvegardé automatiquement sous son nom.")
 
     # ── Affichage et édition ──────────────────────────────────
     if st.session_state["import_df"] is not None and not st.session_state["import_df"].empty:
@@ -1422,12 +1476,15 @@ elif "📤" in page:
                     st.session_state["send_list"]=selected[["name","email"]].to_dict("records")
                     st.rerun()
             with r_b:
-                list_name=st.text_input("Nom de la liste",placeholder="ex: Fédérations Europe",
+                list_name=st.text_input("Nom de la liste",
+                                        value=st.session_state.get("import_src_name",""),
+                                        placeholder="ex: Fédérations Europe",
                                         label_visibility="collapsed")
             with r_c:
                 if st.button("💾 Sauvegarder la liste",use_container_width=True) and list_name:
-                    save_list(list_name,edited.to_dict("records"))
-                    st.success(f"✅ Liste «{list_name}» sauvegardée !")
+                    list_store_save(list_name,edited.to_dict("records"))
+                    where="☁️ cloud" if supa.enabled() else "local"
+                    st.success(f"✅ Liste «{list_name}» sauvegardée ({where}) !")
         else:
             st.warning("☝️ Coche au moins une organisation.")
 
@@ -1848,15 +1905,15 @@ elif "👁️" in page:
 # ════ 📋 LISTES SAUVEGARDÉES ══════════════════════════════════
 elif "📋" in page:
     page_header("Bibliothèque", "Listes sauvegardées", "Gère tes listes de contacts réutilisables")
-    saved=load_saved_lists()
+    saved=list_store_load()
+    if supa.enabled():
+        st.caption("☁️ Tes listes sont stockées dans Supabase — elles **persistent** même après redéploiement du cloud.")
     if not saved:
-        st.info("💡 Aucune liste sauvegardée. Importe un fichier → édite → clique 'Sauvegarder la liste'.")
+        st.info("💡 Aucune liste sauvegardée. Importe un fichier dans 📤 Importer — il est sauvegardé automatiquement sous son nom.")
     else:
-        for p in saved:
-            try: d=json.loads(p.read_text())
-            except: continue   # fichier corrompu → ignoré
-            rows=d.get("rows",[])
-            dname=d.get("name",p.stem); dsaved=d.get("saved","")
+        for i,d in enumerate(saved):
+            rows=d["rows"]; dname=d["name"]; dsaved=d.get("saved","")
+            k=safe_fn(dname) or f"l{i}"
             with st.expander(f"📋 **{dname}** — {len(rows)} contacts — sauvegardé le {dsaved}"):
                 df_s=pd.DataFrame(rows)
                 if not df_s.empty:
@@ -1864,18 +1921,18 @@ elif "📋" in page:
                     st.dataframe(df_s[cols[:3]],use_container_width=True,hide_index=True,height=200)
                 c1,c2,c3=st.columns(3)
                 with c1:
-                    if st.button("📂 Charger & Envoyer",key=f"ls_{p.stem}",type="primary",use_container_width=True):
+                    if st.button("📂 Charger & Envoyer",key=f"ls_{k}_{i}",type="primary",use_container_width=True):
                         st.session_state["send_list"]=[{"name":r.get("name",""),"email":r.get("email","")} for r in rows]
                         st.success(f"✅ {len(rows)} contacts chargés → va dans 🚀 Envoyer")
                 with c2:
                     buf=io.BytesIO()
                     pd.DataFrame(rows)[["name","email"] if "name" in pd.DataFrame(rows).columns else ["email"]]\
                       .to_csv(buf,index=False); buf.seek(0)
-                    st.download_button("⬇️ CSV",data=buf,file_name=f"{p.stem}.csv",
-                                       mime="text/csv",use_container_width=True,key=f"dl_{p.stem}")
+                    st.download_button("⬇️ CSV",data=buf,file_name=f"{k}.csv",
+                                       mime="text/csv",use_container_width=True,key=f"dl_{k}_{i}")
                 with c3:
-                    if st.button("🗑️ Supprimer",key=f"ds_{p.stem}",use_container_width=True):
-                        p.unlink(); st.rerun()
+                    if st.button("🗑️ Supprimer",key=f"ds_{k}_{i}",use_container_width=True):
+                        list_store_delete(dname); st.rerun()
 
 # ════ 📬 BOÎTE MAIL IMAP ══════════════════════════════════════
 elif "📬" in page:

@@ -148,6 +148,34 @@ def get_unsubs():
     except Exception:
         return []
 
+# ── Listes de contacts sauvegardées (persistant cloud, par nom) ──
+def save_list(name, rows):
+    """Upsert une liste de contacts par nom (écrase si le nom existe déjà)."""
+    import datetime
+    url, _ = _cfg()
+    body = {"name": name,
+            "rows": [dict(r) for r in rows],
+            "saved": datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M")}
+    r = requests.post(f"{url}/rest/v1/saved_lists?on_conflict=name", json=body,
+                      headers=_headers({"Prefer": "resolution=merge-duplicates,return=representation"}),
+                      timeout=15)
+    r.raise_for_status()
+    return r.json()
+
+def get_lists():
+    try:
+        return select("saved_lists", "select=*&order=created.desc")
+    except Exception:
+        return []
+
+def delete_list(name):
+    import urllib.parse
+    url, _ = _cfg()
+    r = requests.delete(f"{url}/rest/v1/saved_lists?name=eq.{urllib.parse.quote(name)}",
+                        headers=_headers(), timeout=12)
+    r.raise_for_status()
+    return True
+
 # ── Liste de suppression (bounces / plaintes / blocage manuel) ──
 def add_suppression(email, reason="manual", note=""):
     """Ajoute une adresse à ne plus jamais contacter (upsert)."""
