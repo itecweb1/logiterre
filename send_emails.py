@@ -278,7 +278,8 @@ def build_message(org, recipient_emails, test_mode=False, attach_pdf=None):
         logo_header = ""
         if logo_path.exists():
             logo_header = ('<div style="text-align:center;margin-bottom:18px;">'
-                           '<img src="cid:logiterrelogo" style="max-width:300px;width:60%;"></div>')
+                           '<img src="cid:logiterrelogo" alt="LOGITERRE 2026" '
+                           'width="300" style="max-width:300px;width:60%;height:auto;"></div>')
         html = (f'<html><body style="font-family:Arial,sans-serif;font-size:14px;color:#222;">'
                 f'{logo_header}{html_body}{cta}{unsub}{pixel}</body></html>')
         msg.add_alternative(html, subtype="html")
