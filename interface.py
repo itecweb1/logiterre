@@ -919,6 +919,33 @@ def list_store_delete(name):
         try: p.unlink()
         except Exception: pass
 
+def list_store_names():
+    """Set des noms de bases existantes (pour détecter les collisions)."""
+    return {d["name"] for d in list_store_load()}
+
+def list_store_rename(old, new):
+    """Renomme une base. Retourne (ok, message)."""
+    old=(old or "").strip(); new=(new or "").strip()
+    if not new: return False, "Nom vide."
+    if new==old: return True, "Inchangé."
+    if new in list_store_names(): return False, f"Le nom «{new}» existe déjà."
+    if supa.enabled():
+        try:
+            supa.rename_list(old, new); return True, f"Renommé en «{new}»."
+        except Exception as e:
+            return False, f"Erreur : {str(e)[:80]}"
+    # local : relire, réécrire sous le nouveau nom, supprimer l'ancien
+    op=LISTS_DIR/f"{safe_fn(old)}.json"
+    rows=[]
+    if op.exists():
+        try: rows=json.loads(op.read_text()).get("rows",[])
+        except Exception: pass
+    save_list(new, rows)
+    if op.exists():
+        try: op.unlink()
+        except Exception: pass
+    return True, f"Renommé en «{new}»."
+
 # ── Warmup : limite d'envoi du jour selon la montée en charge ──
 def warmup_today_limit():
     """Limite d'envois pour aujourd'hui selon le warmup (Supabase). None si inactif."""
@@ -1257,7 +1284,7 @@ with st.sidebar:
         "✅  Inscriptions RSVP",
         "📈  Analytics & Rapport",
         "📬  Boîte mail IMAP",
-        "📋  Listes sauvegardées",
+        "🗄️  Bases de données",
         "⚙️  Paramètres",
     ],label_visibility="collapsed")
     st.markdown("---")
@@ -1392,7 +1419,7 @@ elif "📤" in page:
                         where="☁️ cloud" if supa.enabled() else "local"
                         if saved_ok:
                             st.success(f"✅ {len(results)} organisation(s) extraite(s) depuis **{up.name}** — "
-                                       f"💾 sauvegardé sous «{srcname}» ({where}), retrouvable dans 📋 Listes")
+                                       f"💾 sauvegardé sous «{srcname}» ({where}), géré dans 🗄️ Bases de données")
                         else:
                             st.success(f"✅ {len(results)} organisation(s) extraite(s) depuis **{up.name}**")
                     except Exception as e:
@@ -1902,37 +1929,108 @@ elif "👁️" in page:
             use_container_width=True,hide_index=True,height=280)
     if status in ("running","paused","scheduled"): time.sleep(2); st.rerun()
 
-# ════ 📋 LISTES SAUVEGARDÉES ══════════════════════════════════
-elif "📋" in page:
-    page_header("Bibliothèque", "Listes sauvegardées", "Gère tes listes de contacts réutilisables")
+# ════ 🗄️ BASES DE DONNÉES ═════════════════════════════════════
+elif "🗄️" in page:
+    page_header("Données", "Bases de données",
+                "Gère tes bases de contacts : renommer · fusionner · dédupliquer · exporter")
     saved=list_store_load()
-    if supa.enabled():
-        st.caption("☁️ Tes listes sont stockées dans Supabase — elles **persistent** même après redéploiement du cloud.")
+    st.caption("☁️ Stockées dans Supabase — persistent même après redéploiement du cloud."
+               if supa.enabled() else
+               "💾 Stockées en local — configure Supabase (Secrets) pour la persistance cloud.")
+
+    # ── Vue d'ensemble ────────────────────────────────────────
+    all_emails=[(r.get("email","") or "").lower().strip()
+                for d in saved for r in d["rows"] if (r.get("email","") or "").strip()]
+    k1,k2,k3=st.columns(3)
+    k1.metric("🗄️ Bases", len(saved))
+    k2.metric("👥 Contacts (total)", len(all_emails))
+    k3.metric("✉️ Emails uniques", len(set(all_emails)))
+
     if not saved:
-        st.info("💡 Aucune liste sauvegardée. Importe un fichier dans 📤 Importer — il est sauvegardé automatiquement sous son nom.")
+        st.info("💡 Aucune base. Importe un fichier dans 📤 Importer — il est sauvegardé automatiquement sous son nom.")
     else:
+        # ── Tableau récapitulatif ─────────────────────────────
+        st.markdown('<div class="section-title">📊 Tes bases</div>',unsafe_allow_html=True)
+        st.dataframe(pd.DataFrame([{
+            "🗄️ Nom": d["name"],
+            "👥 Contacts": len(d["rows"]),
+            "✉️ Uniques": len({(r.get("email","") or "").lower().strip() for r in d["rows"] if r.get("email")}),
+            "📅 Sauvegardé": d.get("saved",""),
+        } for d in saved]),use_container_width=True,hide_index=True)
+
+        # ── Gérer chaque base ─────────────────────────────────
+        st.markdown('<div class="section-title">⚙️ Gérer une base</div>',unsafe_allow_html=True)
         for i,d in enumerate(saved):
             rows=d["rows"]; dname=d["name"]; dsaved=d.get("saved","")
             k=safe_fn(dname) or f"l{i}"
-            with st.expander(f"📋 **{dname}** — {len(rows)} contacts — sauvegardé le {dsaved}"):
+            with st.expander(f"🗄️ **{dname}** — {len(rows)} contacts — *{dsaved}*"):
                 df_s=pd.DataFrame(rows)
                 if not df_s.empty:
                     cols=["name","email"] if "name" in df_s.columns else df_s.columns.tolist()
-                    st.dataframe(df_s[cols[:3]],use_container_width=True,hide_index=True,height=200)
-                c1,c2,c3=st.columns(3)
-                with c1:
+                    st.dataframe(df_s[cols[:3]],use_container_width=True,hide_index=True,height=180)
+                # ✏️ Renommer
+                rn1,rn2=st.columns([3,1])
+                with rn1:
+                    newname=st.text_input("Nouveau nom",value=dname,key=f"rn_{k}_{i}",
+                                          label_visibility="collapsed")
+                with rn2:
+                    if st.button("✏️ Renommer",key=f"rnb_{k}_{i}",use_container_width=True):
+                        ok,msg=list_store_rename(dname,newname)
+                        (st.success if ok else st.error)(msg)
+                        if ok: st.rerun()
+                # Actions
+                a1,a2,a3=st.columns(3)
+                with a1:
                     if st.button("📂 Charger & Envoyer",key=f"ls_{k}_{i}",type="primary",use_container_width=True):
                         st.session_state["send_list"]=[{"name":r.get("name",""),"email":r.get("email","")} for r in rows]
-                        st.success(f"✅ {len(rows)} contacts chargés → va dans 🚀 Envoyer")
-                with c2:
+                        st.success(f"✅ {len(rows)} contacts chargés → 🚀 Envoyer")
+                with a2:
                     buf=io.BytesIO()
                     pd.DataFrame(rows)[["name","email"] if "name" in pd.DataFrame(rows).columns else ["email"]]\
                       .to_csv(buf,index=False); buf.seek(0)
                     st.download_button("⬇️ CSV",data=buf,file_name=f"{k}.csv",
                                        mime="text/csv",use_container_width=True,key=f"dl_{k}_{i}")
-                with c3:
+                with a3:
                     if st.button("🗑️ Supprimer",key=f"ds_{k}_{i}",use_container_width=True):
                         list_store_delete(dname); st.rerun()
+
+        # ── Outils : fusionner / dédupliquer ──────────────────
+        st.markdown("---")
+        st.markdown('<div class="section-title">🛠️ Outils</div>',unsafe_allow_html=True)
+        names=[d["name"] for d in saved]
+        tA,tB=st.columns(2)
+        with tA:
+            st.markdown("**🔗 Fusionner** (déduplique par email)")
+            picks=st.multiselect("Bases à fusionner",names,key="merge_pick",label_visibility="collapsed")
+            mergename=st.text_input("Nom de la base fusionnée",key="merge_name",
+                                    placeholder="ex: Toutes_Europe")
+            if st.button("🔗 Fusionner",use_container_width=True):
+                if len(picks)<2: st.warning("Choisis au moins 2 bases.")
+                elif not mergename.strip(): st.warning("Donne un nom à la base fusionnée.")
+                else:
+                    byemail={}
+                    for d in saved:
+                        if d["name"] in picks:
+                            for r in d["rows"]:
+                                e=(r.get("email","") or "").lower().strip()
+                                if e and e not in byemail: byemail[e]=r
+                    merged=list(byemail.values())
+                    list_store_save(mergename.strip(),merged)
+                    st.success(f"✅ «{mergename}» créée — {len(merged)} contacts uniques")
+                    st.rerun()
+        with tB:
+            st.markdown("**🧹 Dédupliquer** une base")
+            dpick=st.selectbox("Base",names,key="dedup_pick",label_visibility="collapsed")
+            if st.button("🧹 Retirer les doublons",use_container_width=True):
+                d=[x for x in saved if x["name"]==dpick][0]
+                byemail={}
+                for r in d["rows"]:
+                    e=(r.get("email","") or "").lower().strip()
+                    if e and e not in byemail: byemail[e]=r
+                before=len(d["rows"]); after=len(byemail)
+                list_store_save(dpick,list(byemail.values()))
+                st.success(f"✅ «{dpick}» : {before} → {after} ({before-after} doublons retirés)")
+                st.rerun()
 
 # ════ 📬 BOÎTE MAIL IMAP ══════════════════════════════════════
 elif "📬" in page:

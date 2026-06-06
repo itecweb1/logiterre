@@ -176,6 +176,16 @@ def delete_list(name):
     r.raise_for_status()
     return True
 
+def rename_list(old, new):
+    """Renomme une base. Lève une exception si le nouveau nom existe déjà (contrainte unique)."""
+    import urllib.parse
+    url, _ = _cfg()
+    r = requests.patch(f"{url}/rest/v1/saved_lists?name=eq.{urllib.parse.quote(old)}",
+                       json={"name": new},
+                       headers=_headers({"Prefer": "return=representation"}), timeout=12)
+    r.raise_for_status()
+    return r.json()
+
 # ── Liste de suppression (bounces / plaintes / blocage manuel) ──
 def add_suppression(email, reason="manual", note=""):
     """Ajoute une adresse à ne plus jamais contacter (upsert)."""
