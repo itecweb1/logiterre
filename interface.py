@@ -1946,8 +1946,23 @@ elif "🗄️" in page:
     k2.metric("👥 Contacts (total)", len(all_emails))
     k3.metric("✉️ Emails uniques", len(set(all_emails)))
 
+    _existing_names={d["name"] for d in saved}
+    # ── ➕ Créer une base vide (toujours disponible) ───────────
+    with st.expander("➕ Créer une nouvelle base (vide)"):
+        nb1,nb2=st.columns([3,1])
+        with nb1:
+            newbase=st.text_input("Nom de la base",key="newbase_name",
+                                  placeholder="ex: Prospects_Maroc",label_visibility="collapsed")
+        with nb2:
+            if st.button("➕ Créer",key="newbase_btn",type="primary",use_container_width=True):
+                nm=(newbase or "").strip()
+                if not nm: st.warning("Donne un nom.")
+                elif nm in _existing_names: st.warning(f"«{nm}» existe déjà.")
+                else:
+                    list_store_save(nm,[]); st.success(f"✅ Base «{nm}» créée — édite-la ci-dessous."); st.rerun()
+
     if not saved:
-        st.info("💡 Aucune base. Importe un fichier dans 📤 Importer — il est sauvegardé automatiquement sous son nom.")
+        st.info("💡 Aucune base. Crée-en une ci-dessus, ou importe un fichier dans 📤 Importer (sauvegardé automatiquement).")
     else:
         # ── Tableau récapitulatif ─────────────────────────────
         st.markdown('<div class="section-title">📊 Tes bases</div>',unsafe_allow_html=True)
@@ -1964,10 +1979,25 @@ elif "🗄️" in page:
             rows=d["rows"]; dname=d["name"]; dsaved=d.get("saved","")
             k=safe_fn(dname) or f"l{i}"
             with st.expander(f"🗄️ **{dname}** — {len(rows)} contacts — *{dsaved}*"):
-                df_s=pd.DataFrame(rows)
-                if not df_s.empty:
-                    cols=["name","email"] if "name" in df_s.columns else df_s.columns.tolist()
-                    st.dataframe(df_s[cols[:3]],use_container_width=True,hide_index=True,height=180)
+                # ✏️ Édition directe des contacts (ajouter / retirer / modifier des lignes)
+                edit_df=pd.DataFrame(rows)
+                for _c in ["name","email"]:
+                    if _c not in edit_df.columns: edit_df[_c]=""
+                edit_df=edit_df[["name","email"]]
+                edited_db=st.data_editor(edit_df,num_rows="dynamic",key=f"edit_{k}_{i}",
+                    use_container_width=True,height=240,
+                    column_config={"name":st.column_config.TextColumn("🏛️ Organisation",width="large"),
+                                   "email":st.column_config.TextColumn("📧 Email",width="medium")})
+                es1,es2=st.columns([1,2])
+                with es1:
+                    if st.button("💾 Enregistrer",key=f"save_{k}_{i}",type="primary",use_container_width=True):
+                        new_rows=[r for r in edited_db.to_dict("records")
+                                  if (str(r.get("email","")).strip() or str(r.get("name","")).strip())]
+                        list_store_save(dname,new_rows)
+                        st.success(f"✅ «{dname}» enregistrée — {len(new_rows)} contacts"); st.rerun()
+                with es2:
+                    st.caption("➕ ligne en bas du tableau pour ajouter · 🗑️ coche une ligne pour la retirer · puis 💾 Enregistrer")
+                st.markdown("")
                 # ✏️ Renommer
                 rn1,rn2=st.columns([3,1])
                 with rn1:
