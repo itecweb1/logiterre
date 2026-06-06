@@ -1979,24 +1979,51 @@ elif "🗄️" in page:
             rows=d["rows"]; dname=d["name"]; dsaved=d.get("saved","")
             k=safe_fn(dname) or f"l{i}"
             with st.expander(f"🗄️ **{dname}** — {len(rows)} contacts — *{dsaved}*"):
-                # ✏️ Édition directe des contacts (ajouter / retirer / modifier des lignes)
-                edit_df=pd.DataFrame(rows)
-                for _c in ["name","email"]:
-                    if _c not in edit_df.columns: edit_df[_c]=""
-                edit_df=edit_df[["name","email"]]
-                edited_db=st.data_editor(edit_df,num_rows="dynamic",key=f"edit_{k}_{i}",
-                    use_container_width=True,height=240,
-                    column_config={"name":st.column_config.TextColumn("🏛️ Organisation",width="large"),
-                                   "email":st.column_config.TextColumn("📧 Email",width="medium")})
-                es1,es2=st.columns([1,2])
-                with es1:
-                    if st.button("💾 Enregistrer",key=f"save_{k}_{i}",type="primary",use_container_width=True):
-                        new_rows=[r for r in edited_db.to_dict("records")
-                                  if (str(r.get("email","")).strip() or str(r.get("name","")).strip())]
-                        list_store_save(dname,new_rows)
-                        st.success(f"✅ «{dname}» enregistrée — {len(new_rows)} contacts"); st.rerun()
-                with es2:
-                    st.caption("➕ ligne en bas du tableau pour ajouter · 🗑️ coche une ligne pour la retirer · puis 💾 Enregistrer")
+                # ➕ Ajout rapide d'un contact + 🔎 recherche
+                qa1,qa2,qa3=st.columns([2,2,1])
+                with qa1:
+                    qa_name=st.text_input("Nom",key=f"qan_{k}_{i}",
+                        placeholder="🏛️ Nom (ajout rapide)",label_visibility="collapsed")
+                with qa2:
+                    qa_email=st.text_input("Email",key=f"qae_{k}_{i}",
+                        placeholder="📧 Email",label_visibility="collapsed")
+                with qa3:
+                    if st.button("➕ Ajouter",key=f"qab_{k}_{i}",use_container_width=True):
+                        if str(qa_email).strip() or str(qa_name).strip():
+                            list_store_save(dname,rows+[{"name":str(qa_name).strip(),"email":str(qa_email).strip()}])
+                            st.success("✅ Contact ajouté"); st.rerun()
+                        else: st.warning("Renseigne au moins un email.")
+                q=st.text_input("🔎 Rechercher",key=f"q_{k}_{i}",
+                    placeholder="🔎 Rechercher un contact (nom ou email)…",label_visibility="collapsed")
+
+                if str(q).strip():
+                    # 🔎 Mode recherche : lecture seule filtrée
+                    ql=str(q).lower().strip()
+                    matches=[r for r in rows if ql in str(r.get("name","")).lower()
+                             or ql in str(r.get("email","")).lower()]
+                    st.caption(f"🔎 {len(matches)} résultat(s) — efface la recherche pour éditer")
+                    if matches:
+                        st.dataframe(pd.DataFrame(matches)[["name","email"] if "name" in pd.DataFrame(matches).columns else ["email"]],
+                            use_container_width=True,hide_index=True,height=min(60+len(matches)*36,300))
+                else:
+                    # ✏️ Mode édition : ajouter / retirer / modifier des lignes
+                    edit_df=pd.DataFrame(rows)
+                    for _c in ["name","email"]:
+                        if _c not in edit_df.columns: edit_df[_c]=""
+                    edit_df=edit_df[["name","email"]]
+                    edited_db=st.data_editor(edit_df,num_rows="dynamic",key=f"edit_{k}_{i}",
+                        use_container_width=True,height=240,
+                        column_config={"name":st.column_config.TextColumn("🏛️ Organisation",width="large"),
+                                       "email":st.column_config.TextColumn("📧 Email",width="medium")})
+                    es1,es2=st.columns([1,2])
+                    with es1:
+                        if st.button("💾 Enregistrer",key=f"save_{k}_{i}",type="primary",use_container_width=True):
+                            new_rows=[r for r in edited_db.to_dict("records")
+                                      if (str(r.get("email","")).strip() or str(r.get("name","")).strip())]
+                            list_store_save(dname,new_rows)
+                            st.success(f"✅ «{dname}» enregistrée — {len(new_rows)} contacts"); st.rerun()
+                    with es2:
+                        st.caption("➕ ligne en bas du tableau · 🗑️ coche une ligne pour la retirer · puis 💾 Enregistrer")
                 st.markdown("")
                 # ✏️ Renommer
                 rn1,rn2=st.columns([3,1])
