@@ -29,8 +29,8 @@ from send_emails import send_one, save_log, load_log, CC_EMAILS
 from academies_clean import ACADEMIES
 
 # Délai fixe 2 minutes
-PRUDENT_MIN_DELAY = 120
-PRUDENT_MAX_DELAY = 120
+PRUDENT_MIN_DELAY = 60
+PRUDENT_MAX_DELAY = 60
 
 LOG_FILE = Path("/Users/ayb/Desktop/logiterre-expo/email_log.json")
 
