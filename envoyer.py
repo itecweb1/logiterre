@@ -27,7 +27,7 @@ MY_LIST = [
 # ─────────────────────────────────────────────────────────────
 #  ⚙️  PARAMÈTRES (ne pas toucher sauf besoin)
 # ─────────────────────────────────────────────────────────────
-DELAI_ENTRE_EMAILS = 120   # secondes entre chaque envoi (2 minutes)
+DELAI_ENTRE_EMAILS = 60   # secondes entre chaque envoi (2 minutes)
 
 # ═════════════════════════════════════════════════════════════
 #  CODE (ne pas modifier)
